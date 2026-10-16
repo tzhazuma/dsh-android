@@ -1,0 +1,11 @@
+# Node modules and build outputs
+node_modules/
+*.node
+build/
+dist/
+
+# Large downloaded artefacts
+downloads/
+*.apk
+*.tar.gz
+*.tgz

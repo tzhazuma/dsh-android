@@ -1,0 +1,26 @@
+=== dsh-bridge -> Termux RunCommandService, end-to-end on REAL DEVICE ===
+device: vivo PA2573 (DPD2429), Android 16 / arm64, adb 192.168.0.108:34963
+date: Fri Oct 16 11:41:19 CST 2026
+
+--- our APK's dispatch path ---
+DISPATCH_OK via startForegroundService (primary path; vivo silently drops startService)
+
+--- Termux-side result file (executed INSIDE Termux, as Termux uid) ---
+BRIDGE_OK Fri Oct 16 11:40:44 CST 2026 uid=10238
+
+--- permission grant state ---
+      com.termux.permission.RUN_COMMAND
+        com.termux.permission.RUN_COMMAND: granted=true
+
+--- allow-external-apps ---
+183:allow-external-apps = true
+
+--- ROOT CAUSE of the earlier silent failure ---
+Termux reads allow-external-apps at APP PROCESS START and caches it in memory.
+The Termux process predated our properties edit, so it kept the old value (false)
+and rejected every dispatch SILENTLY (vivo also filters app logcat, so nothing appeared).
+Fix = 'am force-stop com.termux' (documented in termux.properties itself:
+  'Some properties require app process to be restarted to be updated').
+
+--- Termux process after clean restart ---
+u0_a238      13555  1007   15612484 124004 0                   0 S com.termux

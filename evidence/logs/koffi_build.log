@@ -1,0 +1,45 @@
+=== koffi rebuild with dsh-android statx patch ===
+Fri Oct 16 11:42:20 CST 2026
+Failed to load prebuilt binary, rebuilding from source
+>> Using CMake binary: cmake
+>> Node: 26.4.0
+>> Toolchain: native
+>> Using local node-api headers
+>> Running configuration
+The --no-warn-unused-cli option is deprecated.  Use -Wno-unused-cli instead.
+-- The C compiler identification is Clang 21.1.8
+-- The CXX compiler identification is Clang 21.1.8
+-- The ASM compiler identification is Clang with GNU-like command-line
+-- Found assembler: /data/data/com.termux/files/usr/bin/cc
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Check for working C compiler: /data/data/com.termux/files/usr/bin/cc - skipped
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: /data/data/com.termux/files/usr/bin/c++ - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Performing Test use_no_finite_loops
+-- Performing Test use_no_finite_loops - Success
+-- Configuring done (3.2s)
+-- Generating done (0.0s)
+-- Build files have been written to: /data/data/com.termux/files/home/dsh-test/node_modules/koffi/build/koffi/android_arm64/v26.4.0_native/Release
+>> Running build
+[ 25%] Generate trampoline macros
+[ 50%] Building ASM object CMakeFiles/koffi.dir/src/abi/arm64_asm.S.o
+[ 75%] Building CXX object CMakeFiles/koffi.dir/koffi_unity.cpp.o
+In file included from /data/data/com.termux/files/home/dsh-test/node_modules/koffi/build/koffi/android_arm64/v26.4.0_native/Release/koffi_unity.cpp:8:
+/data/data/com.termux/files/home/dsh-test/node_modules/koffi/src/koffi/../../lib/native/base/base.cc:1227:10: warning: Cannot format floating point values correctly without Dragonbox [-W#warnings]
+ 1227 |         #warning Cannot format floating point values correctly without Dragonbox
+      |          ^
+1 warning generated.
+[100%] Linking CXX shared library Output/koffi.node
+[100%] Built target koffi
+>> Copy target files
+CNOKE_EXIT=0
+--- produced artifacts ---
+./build/koffi/android_arm64/v26.4.0_native/Release/Output/koffi.node
+./build/koffi/android_arm64/koffi.node
+=== done Fri Oct 16 11:42:33 CST 2026 ===

@@ -1,0 +1,20 @@
+=== dsh-bridge -> Termux RunCommandService, end-to-end on emulator-5554 (Android 16, arm64) ===
+date: Fri Oct 16 02:53:00 CST 2026
+
+--- our APK's logcat ---
+10-16 02:52:20.065 31834 31834 I DshBridge: onCreate
+10-16 02:52:22.351 31834 31834 I DshBridge: DISPATCH_OK via startForegroundService argv=[-c, echo BRIDGE_OK $(date) uid=$(id -u) > /data/data/com.termux/files/home/dshx/bridge_result.txt]
+
+--- Termux-side result file (executed inside Termux) ---
+BRIDGE_OK Fri Oct 16 02:52:23 CST 2026 uid=10221
+
+--- permission grant state ---
+      com.termux.permission.RUN_COMMAND
+        com.termux.permission.RUN_COMMAND: granted=true
+
+--- allow-external-apps in Termux ---
+21:# allow-external-apps = true
+192:allow-external-apps = true
+
+--- did Termux fail to call startForeground in time? (ANR check) ---
+(empty above = no ANR)

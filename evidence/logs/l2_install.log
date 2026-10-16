@@ -1,0 +1,77 @@
+=== L2: npm install @deepseek-ai/dsh@0.2.0-rc.2 in Termux ===
+Fri Oct 16 02:05:16 CST 2026
+node=v26.4.0 npm=11.19.1
+cwd=/data/data/com.termux/files/home/dsh-test
+--- npm install (scripts ENABLED, foreground) ---
+npm warn deprecated node-domexception@1.0.0: Use your platform's native DOMException instead
+
+> @google/genai@2.21.0 preinstall
+> echo 'preinstall: no-op'
+
+preinstall: no-op
+
+> koffi@3.1.1 install
+> node ./cnoke.cjs -P . -D src/koffi --prebuild --release
+
+Failed to load prebuilt binary, rebuilding from source
+>> Using CMake binary: cmake
+>> Node: 26.4.0
+>> Toolchain: native
+>> Using local node-api headers
+>> Running configuration
+The --no-warn-unused-cli option is deprecated.  Use -Wno-unused-cli instead.
+-- The C compiler identification is Clang 21.1.8
+-- The CXX compiler identification is Clang 21.1.8
+-- The ASM compiler identification is Clang with GNU-like command-line
+-- Found assembler: /data/data/com.termux/files/usr/bin/cc
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Check for working C compiler: /data/data/com.termux/files/usr/bin/cc - skipped
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: /data/data/com.termux/files/usr/bin/c++ - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Performing Test use_no_finite_loops
+-- Performing Test use_no_finite_loops - Success
+-- Configuring done (3.2s)
+-- Generating done (0.0s)
+-- Build files have been written to: /data/data/com.termux/files/home/dsh-test/node_modules/koffi/build/koffi/android_arm64/v26.4.0_native/Release
+>> Running build
+[ 25%] Generate trampoline macros
+[ 50%] Building ASM object CMakeFiles/koffi.dir/src/abi/arm64_asm.S.o
+[ 75%] Building CXX object CMakeFiles/koffi.dir/koffi_unity.cpp.o
+In file included from /data/data/com.termux/files/home/dsh-test/node_modules/koffi/build/koffi/android_arm64/v26.4.0_native/Release/koffi_unity.cpp:8:
+/data/data/com.termux/files/home/dsh-test/node_modules/koffi/src/koffi/../../lib/native/base/base.cc:1218:10: warning: Cannot format floating point values correctly without Dragonbox [-W#warnings]
+ 1218 |         #warning Cannot format floating point values correctly without Dragonbox
+      |          ^
+/data/data/com.termux/files/home/dsh-test/node_modules/koffi/src/koffi/../../lib/native/base/base.cc:2967:19: error: cannot initialize a member subobject of type '__u32' (aka 'unsigned int') with an lvalue of type 'const char *'
+ 2967 |     if (statx(fd, pathname, stat_flags, stat_mask, &sxb) < 0) {
+      |                   ^~~~~~~~
+/data/data/com.termux/files/home/dsh-test/node_modules/koffi/src/koffi/../../lib/native/base/base.cc:2967:58: error: invalid operands to binary expression ('statx' and 'int')
+ 2967 |     if (statx(fd, pathname, stat_flags, stat_mask, &sxb) < 0) {
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ^ ~
+1 warning and 2 errors generated.
+make[2]: *** [CMakeFiles/koffi.dir/build.make:105: CMakeFiles/koffi.dir/koffi_unity.cpp.o] Error 1
+make[1]: *** [CMakeFiles/Makefile2:87: CMakeFiles/koffi.dir/all] Error 2
+make: *** [Makefile:91: all] Error 2
+Error: Failed to run build step
+    at Builder.build (/data/data/com.termux/files/home/dsh-test/node_modules/koffi/cnoke.cjs:514:13)
+    at async main (/data/data/com.termux/files/home/dsh-test/node_modules/koffi/cnoke.cjs:769:5)
+npm error code 1
+npm error path /data/data/com.termux/files/home/dsh-test/node_modules/koffi
+npm error command failed
+npm error command sh -c node ./cnoke.cjs -P . -D src/koffi --prebuild --release
+npm notice
+npm notice New major version of npm available! 11.19.1 -> 12.2.0
+npm notice Changelog: https://github.com/npm/cli/releases/tag/v12.2.0
+npm notice To update run: npm install -g npm@12.2.0
+npm notice
+npm error A complete log of this run can be found in: /data/data/com.termux/files/home/.npm/_logs/2026-10-15T18_05_17_041Z-debug-0.log
+NPM_EXIT=1
+--- tree top-level ---
+ls: cannot access 'node_modules/@deepseek-ai/': No such file or directory
+--- native .node artifacts found ---
+--- end Fri Oct 16 02:07:11 CST 2026 ---

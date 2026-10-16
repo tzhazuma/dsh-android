@@ -1,0 +1,77 @@
+=== approve install scripts + rerun builds ===
+Fri Oct 16 11:46:53 CST 2026
+Approved @google/genai:
+  added @google/genai@2.21.0
+Approved koffi:
+  added koffi@3.1.1
+Approved node-pty:
+  added node-pty@1.2.0-beta.15
+Approved protobufjs:
+  added protobufjs@7.6.6
+--- rebuild with scripts (foreground) ---
+
+> node-pty@1.2.0-beta.15 install
+> node scripts/prebuild.js || node-gyp rebuild
+
+[32m> Checking prebuilds...[0m
+[33m> Rebuilding because directory /data/data/com.termux/files/home/dsh-test/node_modules/node-pty/prebuilds/android-arm64 does not exist[0m
+gyp info it worked if it ends with ok
+gyp info using node-gyp@12.4.0
+gyp info using node@26.4.0 | android | arm64
+gyp info find Python using Python version 3.14.6 found at "/data/data/com.termux/files/usr/bin/python3"
+gyp info spawn /data/data/com.termux/files/usr/bin/python3
+gyp info spawn args [
+gyp info spawn args '/data/data/com.termux/files/usr/lib/node_modules/npm/node_modules/node-gyp/gyp/gyp_main.py',
+gyp info spawn args 'binding.gyp',
+gyp info spawn args '-f',
+gyp info spawn args 'make',
+gyp info spawn args '-I',
+gyp info spawn args '/data/data/com.termux/files/home/dsh-test/node_modules/node-pty/build/config.gypi',
+gyp info spawn args '-I',
+gyp info spawn args '/data/data/com.termux/files/usr/lib/node_modules/npm/node_modules/node-gyp/addon.gypi',
+gyp info spawn args '-I',
+gyp info spawn args '/data/data/com.termux/files/usr/include/node/common.gypi',
+gyp info spawn args '-Dlibrary=shared_library',
+gyp info spawn args '-Dvisibility=default',
+gyp info spawn args '-Dnode_root_dir=/data/data/com.termux/files/usr',
+gyp info spawn args '-Dnode_gyp_dir=/data/data/com.termux/files/usr/lib/node_modules/npm/node_modules/node-gyp',
+gyp info spawn args '-Dnode_lib_file=/data/data/com.termux/files/usr/$(Configuration)/node.lib',
+gyp info spawn args '-Dmodule_root_dir=/data/data/com.termux/files/home/dsh-test/node_modules/node-pty',
+gyp info spawn args '-Dnode_engine=v8',
+gyp info spawn args '--depth=.',
+gyp info spawn args '--no-parallel',
+gyp info spawn args '--generator-output',
+gyp info spawn args 'build',
+gyp info spawn args '-Goutput_dir=.'
+gyp info spawn args ]
+gyp info spawn make
+gyp info spawn args [ 'BUILDTYPE=Release', '-C', 'build' ]
+make: Entering directory '/data/data/com.termux/files/home/dsh-test/node_modules/node-pty/build'
+  TOUCH Release/obj.target/../node-addon-api/node_addon_api_except.stamp
+  CXX(target) Release/obj.target/pty/src/unix/pty.o
+  SOLINK_MODULE(target) Release/obj.target/pty.node
+  COPY Release/pty.node
+make: Leaving directory '/data/data/com.termux/files/home/dsh-test/node_modules/node-pty/build'
+gyp info ok 
+
+> @deepseek-ai/dsh-subprocess-local@0.2.0-rc.2 postinstall
+> node scripts/ensure-spawn-helper.mjs
+
+
+> node-pty@1.2.0-beta.15 postinstall
+> node scripts/post-install.js
+
+[32m> Cleaning release folder...[0m
+[32m> Moving conpty.dll...[0m
+  SKIPPED (not Windows)
+
+> protobufjs@7.6.6 postinstall
+> node scripts/postinstall
+
+rebuilt dependencies successfully
+REBUILD_EXIT=0
+--- .node artifacts (excluding shipped prebuilds) ---
+node_modules/koffi/build/koffi/android_arm64/v26.4.0_native/Release/Output/koffi.node
+node_modules/koffi/build/koffi/android_arm64/koffi.node
+node_modules/node-pty/build/Release/pty.node
+=== done Fri Oct 16 11:47:00 CST 2026 ===

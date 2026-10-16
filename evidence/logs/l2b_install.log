@@ -1,0 +1,59 @@
+=== L2b: npm install --ignore-scripts (get the tree, bypass koffi build) ===
+Fri Oct 16 02:09:30 CST 2026
+npm warn deprecated node-domexception@1.0.0: Use your platform's native DOMException instead
+
+added 530 packages in 49s
+NPM_EXIT=0
+--- dsh bin present? ---
+-rwxrwxrwx. 1 u0_a238 u0_a238 11697 Oct 16 02:10 node_modules/@deepseek-ai/dsh/lib/bin.js
+--- deepseek packages installed ---
+cordis
+cordis-plugin-group
+cordis-plugin-include
+cordis-plugin-loader
+cordis-plugin-timer
+cosmokit
+dsh
+dsh-acp
+dsh-acp-app
+dsh-agent
+dsh-agent-default-model
+dsh-agent-instructions
+dsh-agent-loop
+dsh-agent-preset
+dsh-agent-preset-registry
+dsh-agent-tool-presentation
+dsh-anonymous-user-id
+dsh-api-account-controller
+dsh-api-gateway
+dsh-api-job-controller
+dsh-api-remotes
+dsh-api-session-controller
+dsh-api-settings-controller
+dsh-api-terminal-controller
+dsh-api-workspace-controller
+dsh-api-workspace-files
+dsh-app-boot
+dsh-atomic-write
+dsh-attachment
+dsh-attachment-local
+dsh-authorization
+dsh-base
+dsh-bash-local
+dsh-bash-sandbox
+dsh-brand
+dsh-chunked-list
+dsh-client-connection
+dsh-client-file-upload
+dsh-client-hmr
+dsh-client-locale
+--- prebuilt .node artifacts shipped in packages ---
+node_modules/node-pty/prebuilds/darwin-arm64/pty.node
+node_modules/node-pty/prebuilds/darwin-x64/pty.node
+node_modules/node-pty/prebuilds/win32-arm64/conpty_console_list.node
+node_modules/node-pty/prebuilds/win32-arm64/conpty.node
+node_modules/node-pty/prebuilds/win32-x64/conpty_console_list.node
+node_modules/node-pty/prebuilds/win32-x64/conpty.node
+node_modules/node-pty/prebuilds/linux-arm64/pty.node
+node_modules/node-pty/prebuilds/linux-x64/pty.node
+--- end Fri Oct 16 02:10:20 CST 2026 ---
