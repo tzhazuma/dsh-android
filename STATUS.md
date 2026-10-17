@@ -554,3 +554,252 @@ dsh 代码本身**没有** Android 不兼容问题；障碍全部来自**原生�
 
 > Termux 侧工作目录：`/data/data/com.termux/files/home/dshx/`（env.sh、各测试脚本、日志）
 > 与 `~/dsh-test/`（530 包安装树，dsh 运行于此）。
+
+---
+
+# 9. 2026-10-17 收尾轮：4 个失败模块逐个结清 + **dsh 原生 APK 端到端跑通**
+
+> 本轮目标：处理 `sharp` / `@vscode/ripgrep` / `sherpa-onnx` / `@deepseek-ai/node-addon-system`，
+> 并把 dsh 本体打成**原生 APK**装到设备验证（Termux 仅作 bash 执行后端）。
+
+## 9.1 结论速览
+
+| # | 模块 | 上轮状态 | 本轮结论 |
+|---|---|---|---|
+| 1 | `koffi` | ✅ | ✅ 不变（APK 内实测 `KOFFI_OK 3.1.1`） |
+| 2 | `node-pty` | ✅ | ✅ 不变（APK 内实测 `PTY_OK "PTY_OK"`） |
+| 3 | `protobufjs` | ✅ | ✅ 不变（APK 内 `PROTOBUFJS_OK`） |
+| 4 | `@deepseek-ai/libreoffice-kit` | ✅ | ✅ 不变（APK 内 `LOKIT_OK`） |
+| 5 | **`sharp`** | ❌ | ✅ **已修好且真能处理图像**（WebAssembly 兜底，见 §9.2） |
+| 6 | **`@vscode/ripgrep`** | ❌ | ✅ **已修好**（自建 aarch64-linux-android `rg` 15.2.0，见 §9.3） |
+| 7 | **`@deepseek-ai/node-addon-system`** | ❌（误判） | ✅ **已修好**（上轮的失败是**测法错**；真问题两个都已解决，见 §9.4） |
+| 8 | **`sherpa-onnx`** | ❌ | ❌ **不可修（根因明确）**：上游无 android 产物，见 §9.5 |
+| — | `node-addon-require-builtin` | ⚠️ 有绕行 | ⚠️ 不变（shim + `--expose-internals`，上游无 Android 实现） |
+
+**净结果：8 个里 7 个在 APK 内可用，1 个（sherpa-onnx）有明确的上游缺产物根因。**
+
+## 9.2 `sharp` → 用官方 WebAssembly 兜底路径修好
+
+**关键发现**：`sharp@0.35.5` 的 `dist/sharp.cjs` **自带一条与平台无关的兜底**：
+
+```js
+// dist/sharp.cjs:104
+if (!sharp) {
+  try { sharp = require("@img/sharp-wasm32/sharp.node"); } catch (err) { errors.push(err); }
+}
+```
+
+`@img/sharp-wasm32` 是**纯 JS + WASM**（`index.cjs` + `sharp-wasm32-0.35.5.node.wasm`，
+依赖 `@emnapi/runtime`），**与 CPU/OS 无关**，所以它天然能在 Android 上跑。
+
+**踩到的坑**：设备上 `npm install @img/sharp-wasm32` 失败 ——
+`getaddrinfo ENOTFOUND registry.npmjs.org`（**设备 DNS 不可用**）。
+→ 改在**宿主机**取包再推进设备。
+
+**验证（两层，不只是"能 require"）**：
+```
+SHARP_OK 0.35.5 libvips 8.18.7
+SHARP_PIPELINE_OK 2x2 px 38,217,128,70,185,128,170,85,128,202,53,128
+```
+第二行是**真的跑完图像管线**：4×4 raw RGBA → `resize(2,2)` → 读回像素，
+数值与插值预期一致。
+
+> 代价：WASM 版比原生 libvips 慢（无 SIMD 原生路径）。若日后要原生性能，
+> 仍需为 bionic/arm64 交叉编译 libvips（glib/gobject + 各编解码器），成本最高。
+
+## 9.3 `@vscode/ripgrep` → 自建 android-arm64 平台包
+
+`@vscode/ripgrep@1.18.0` 的 `lib/index.js` 只有 594 字节，逻辑是
+`require.resolve('@vscode/ripgrep-<platform>-<arch>/bin/rg')` ——
+**上游发布矩阵里没有 android**。
+
+**修法**：自己编一个，并伪造同名平台包（**不需要改 dsh 一行代码**）：
+```sh
+rustup target add aarch64-linux-android
+export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$NDK/bin/aarch64-linux-android24-clang
+export CC_aarch64_linux_android=$NDK/bin/aarch64-linux-android24-clang
+export CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS="-C link-arg=-Wl,-z,max-page-size=16384"
+cargo install ripgrep --target aarch64-linux-android --root ~/dsh-android/tools/ripgrep-android --locked
+llvm-strip tools/ripgrep-android/bin/rg          # 29.6 MB -> 4.6 MB
+```
+再建 `node_modules/@vscode/ripgrep-android-arm64/{package.json, bin/rg}`。
+
+**真机/模拟器验证**：
+```
+rg --version → ripgrep 15.2.0 / simd(runtime):+NEON / LOAD 对齐 0x4000
+RG_RUN ripgrep 15.2.0        ← 经 dsh 的 @vscode/ripgrep 解析后再真的执行
+```
+（`--locked` + `-C link-arg=-Wl,-z,max-page-size=16384` 是为了满足 Android 15/16 的 16 KiB 页要求。）
+
+## 9.4 `@deepseek-ai/node-addon-system` → **上轮的失败是测法错**
+
+**先纠正误判**：上轮记的 `ERR_PACKAGE_PATH_NOT_EXPORTED` **不是缺陷**。
+它的 `exports` 里**本来就没有 `.` 入口**：
+
+```json
+"exports": { "./landlock-run": {...}, "./flock": {...}, "./package.json": "./package.json" }
+```
+
+所以 `require('@deepseek-ai/node-addon-system')` 本来就该失败；真正的入口是
+`/landlock-run` 与 `/flock`，两个都能正常加载。消费方也正是这么用的
+（`dsh-sandbox-local` → `/landlock-run`；`dsh-session-persistence-jsonl` → `/flock`）。
+
+**真问题只有两个，都已解决**：
+
+### (a) 缺 `node-addon-system-android-arm64` 平台包 —— 但它**自带 C 源码**
+包 `files` 里包含 `src/main.c`（Landlock 启动器）与 `src/flock.c`（Node-API flock），
+所以可以自建：
+
+```sh
+# landlock-run：纯 C11 + 自己内联的 Landlock UAPI（不依赖 <linux/landlock.h>）
+$NDK/bin/aarch64-linux-android24-clang -O2 -fPIC -Wl,-z,max-page-size=16384 \
+    nas/src/main.c -o nas/landlock-run          # 9,808 B
+# system.node：Node-API C，用 NDK clang 直接编
+$NDK/bin/aarch64-linux-android24-clang -O2 -fPIC -shared \
+    -I/opt/homebrew/Cellar/node/26.12.0/include/node nas/src/flock.c -o nas/system.node   # 11,488 B
+```
+产物只 `NEEDED libdl.so / libc.so`（纯 bionic）。
+然后建平台包 `@deepseek-ai/node-addon-system-android-arm64/{package.json, bin/landlock-run, bin/system.node}`。
+
+### (b) `lib/flock.js` 硬编码平台白名单
+```js
+if (platform !== 'linux' && platform !== 'darwin') { throw ... ERR_FLOCK_UNSUPPORTED_PLATFORM }
+```
+Node 在 Android 上 `process.platform === 'android'` → 直接抛错。
+**1 行补丁**（`patches/0001-node-addon-system-android.patch`）加上 `android`。
+bionic 与 glibc 一样提供 `flock(2)`，所以平台门是唯一障碍。
+
+### 验证结果
+```
+FLOCK_OK fd=19                          ← 真的拿到排他 flock（不是"能 import"）
+LAUNCHER .../node-addon-system-android-arm64/bin/landlock-run
+PROBE "unusable"
+landlock-run: landlock is not enforced by this kernel (ABI unsupported or disabled)   PROBE_RC=125
+```
+**Landlock 的 `"unusable"` 是正确的 fail-closed 诊断**：设备内核
+`6.6.127-android15-8-...-4k` 上 Landlock 未启用（该 ROM 的 kernel config 没开）。
+`probe()` 的语义就是"这个内核到底强不强制"，返回 `unusable` 正是它该做的事 ——
+dsh 的 sandbox 据此降级。**关键区别**：上一轮 `launcherPath()` 指向一个**根本不存在的路径**，
+现在是"二进制存在、真的跑起来、由它自己报告内核不支持"。
+
+## 9.5 `sherpa-onnx` → 不可修（根因明确，非配置问题）
+
+**先纠正误判**：真正的依赖不是 `sherpa-onnx`，而是
+`@deepseek-ai/dsh-experimental-speech-to-text-sensevoice` 依赖的 **`sherpa-onnx-node@1.13.8`**。
+它**在 `node_modules` 里是存在的**（所以上轮的 `MODULE_NOT_FOUND` 也是裸名测法的产物）。
+
+**真正的根因**：`sherpa-onnx-node` 的 `optionalDependencies` 只有
+`darwin-{arm64,x64}` / `linux-{x64,arm64}` / `win32-{x64,ia32}` —— **没有 android**；
+本机 `node_modules/sherpa-onnx-node/` 里**只有 JS，零个 `.node`/`.so`**。
+
+**为什么不在本轮修**：要修得交叉编译整条 sherpa-onnx C++ 栈
+（onnxruntime + kaldi-native-fbank + espeak-ng + …），并写 Node-API 绑定层。
+规模远超本轮预算，且该插件是 **experimental**，dsh 核心不依赖它。
+
+**结论：Android 上语音转文字功能不可用，属功能降级，不阻塞 dsh。**
+
+## 9.6 ⭐ dsh 原生 APK：架构与两个 Android 地雷
+
+### 工程与产物
+- 工程：`android-app/`（AGP 9.2.0 + Gradle 9.4.1；`JAVA_HOME=/opt/homebrew/opt/openjdk@21`）
+- 产物：`dist/dsh-android-0.2.0-rc.2-arm64-debug.apk`（**205 MB**，`com.dsh.android`，targetSdk 35）
+- 架构（用户指定）：**dsh 本体是原生 APK**；Termux 只是 bash 执行后端。
+  - Node 运行时：Termux 的 **Node 26.4.0** 作为 `jniLibs/arm64-v8a/libnode.so`
+  - 它的 10 个 `.so` 依赖（`libz/libcares/libsqlite3/libffi/libcrypto/libssl/libicui18n/libicuuc/libicudata/libc++_shared`）
+    走 **assets → filesDir/rt**（`LD_LIBRARY_PATH`）
+  - dsh 依赖树：`assets/dsh-bundle.zip`（**25,949 文件 / 63 MB**，解压后 281 MB）
+  - UI：`WebView` 加载 `dsh web` 打印的 URL
+  - bash 后端：`TermuxDispatch` → `startForegroundService` → `com.termux/.app.RunCommandService`
+
+### 🔴 地雷 1：**app 数据目录里的可执行文件无法 execve**（Android 10+）
+- 现象：`spawnSync .../files/dsh/.../bin/rg` → **EACCES**。
+- 根因：`untrusted_app` 对 `app_data_file` **没有 execute**（targetSdk ≥ 29 起）；
+  `nativeLibraryDir` 是 `apk_data_file`，**有** execute。
+- **更阴的一次**：`landlock-run` 被 deny 后，`probe()` 返回 `"unusable"` ——
+  看起来和"内核不支持 Landlock"**一模一样**，实际是 exec 被拒。
+- **正解**：所有可执行文件都以 **`lib<name>.so` 放进 `jniLibs`**，
+  再由 app 在数据目录里建 **符号链接**指过去（SELinux 检查的是**解析后的 inode**）：
+  ```java
+  Os.symlink(nativeLibraryDir + "/librg.so", dshDir + "/node_modules/@vscode/ripgrep-android-arm64/bin/rg");
+  ```
+  → 见 `DshRuntime.linkExecutables()`。修好后 `RG_RUN ripgrep 15.2.0`、
+  `landlock-run --probe` 能真的执行并**由它自己**报告内核不支持。
+
+### 🔴 地雷 2：Termux 的 `libcrypto` 把 **OPENSSLDIR 编进了 `.so`**
+- 现象（用 `run-as` 复现时）：Node 一行 JS 都没跑就死：
+  ```
+  libnode.so: OpenSSL configuration error:
+  8000000D:system library:BIO_new_file:Permission denied:
+  calling fopen(/data/data/com.termux/files/usr/etc/tls/openssl.cnf, rb)
+  ```
+- 根因：Termux 的 OpenSSL 构建把
+  `OPENSSLDIR=/data/data/com.termux/files/usr/etc/tls` 写死在 `libcrypto.so.3` 里；
+  我们 app 的 uid 永远读不到 Termux 的私有目录，而 **OpenSSL 把"配置读不到"当致命错误**。
+- **正解**：`DshRuntime.applyEnv()` 里显式 `OPENSSL_CONF=<filesDir>/openssl.cnf`
+  （app 自己写一个空的合法配置）。Node 的 TLS 信任链用它自带的 CA 包，
+  所以不需要任何真正的 OpenSSL 配置。
+- ⚠️ **这条是长期隐患**：任何"从 Termux 拿二进制/库"的做法都会带上 Termux 的
+  编译期路径。后续若自建 Node，应同时把 OpenSSL 的 prefix 指向 app 自己的目录。
+
+### 端到端验证（`emulator-5554`，Android 16 / arm64-v8a；**真机当时锁屏，见 §9.7**）
+```
+node exec: rc=0
+NODE_OK v26.4.0 android/arm64
+extracted 25949 files in 5441 ms
+linked .../bin/rg -> .../lib/arm64/librg.so
+linked .../bin/landlock-run -> .../lib/arm64/liblandlockrun.so
+Termux dispatch: permission com.termux.permission.RUN_COMMAND granted=true
+DISPATCH_OK via startForegroundService
+dsh web: http://127.0.0.1:8899/?token=aurvVPa2qHG_...
+```
+- **HTTP 层**：`curl -L` 经 303（token→cookie 认证）后 `HTTP=200 bytes=34846`，
+  `<title>DeepSeek Harness</title>`，并拿到 `dsh-auth-...` cookie。
+- **截图**：`evidence/dsh-android-apk-02-emulator.png` —— WebView 里**完整渲染出
+  dsh 的 Preview Notice 界面**（鲸鱼 logo / Continue 按钮 / 设置齿轮）。
+- **Termux 侧副作用**（vivo/模拟器都适用：以 Termux 侧文件为准）：
+  ```
+  $ adb shell run-as com.termux cat .../dshx/termux_proof.txt
+  BRIDGE_OK Sat Oct 17 14:54:03 CST 2026 uid=10221 pwd=/data/data/com.termux/files/home
+  ```
+  `uid=10221` = **Termux 的 uid**（不是我们 app 的），证明命令确实由 Termux 执行。
+- **8 个模块在 APK 内实测**（`run-as com.dsh.android` 跑 APK 自己的 node）：
+  ```
+  NODE v26.4.0 android arm64     KOFFI_OK 3.1.1        PTY_OK "PTY_OK"
+  SHARP_OK 0.35.5 libvips 8.18.7 SHARP_PIPELINE_OK 2x2 px 38,217,...
+  RG_RUN ripgrep 15.2.0          FLOCK_OK fd=19        LOKIT_OK   PROTOBUFJS_OK
+  PROBE "unusable" (内核未启用 Landlock，正确)
+  SHERPA_FAIL Could not find sherpa-onnx-node. Tried      ← 见 §9.5
+  ```
+- 全量证据存档：**`evidence/logs/dsh-apk-emulator-e2e.txt`**
+
+## 9.7 ⚠️ 未完成项：**真机（vivo PA2573）装机验证** —— 卡在人类解锁
+
+- 真机状态：`dumpsys window | grep mDreamingLockscreen` → **`mDreamingLockscreen=true`**（锁屏）
+- 安装被拒：`pm install -r -t` → `Failure [INSTALL_FAILED_ABORTED: User rejected permissions]`
+- 已尝试且**无效**：`input keyevent KEYCODE_WAKEUP` + 单指上滑
+  （vivo 的解锁手势是**双指上滑**，adb 合成不出来）
+- **需要人类**：在设备上双指上滑解锁（如需 PIN 一并输入）。
+- 本轮改用 **`emulator-5554`（sdk_gphone64_arm64 / Android 16 / arm64-v8a）**完成了
+  全部端到端验证（同 ABI、同 API 级别），真机验证待解锁后补做。
+
+## 9.8 产物索引（本轮新增）
+
+```
+~/dsh-android/
+├── android-app/                                  ⭐ 原生 APK 工程（AGP 9.2.0 + Gradle 9.4.1）
+│   └── app/src/main/
+│       ├── AndroidManifest.xml                   RUN_COMMAND / queries com.termux / icon
+│       ├── java/com/dsh/android/{MainActivity,DshRuntime,ZipExtractor,Exec,LogFile,TermuxDispatch}.java
+│       ├── jniLibs/arm64-v8a/{libnode.so, librg.so, liblandlockrun.so}
+│       └── assets/{rt/*.so, dsh-bundle.zip}
+├── dist/dsh-android-0.2.0-rc.2-arm64-debug.apk    205 MB 交付物
+├── nas/                                          node-addon-system 自建产物（landlock-run + system.node）
+├── tools/ripgrep-android/bin/rg                  自建 ripgrep 15.2.0
+├── patches/0001-node-addon-system-android.patch  flock.js android 平台补丁
+└── evidence/
+    ├── dsh-android-apk-01-emulator.png           首屏（含 boot 日志）
+    ├── dsh-android-apk-02-emulator.png           ⭐ dsh GUI 在 WebView 内完整渲染
+    ├── dsh-web-gui-served.html                   ⭐ 从设备 curl 回来的 GUI HTML（title=DeepSeek Harness）
+    └── logs/dsh-apk-emulator-e2e.txt             ⭐ 全量端到端证据
+```
+

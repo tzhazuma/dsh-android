@@ -92,11 +92,7 @@ public class MainActivity extends Activity {
                     Exec.cmd(node.getAbsolutePath(), "-e",
                             "console.log('NODE_OK ' + process.version + ' ' + process.platform + '/' + process.arch)"),
                     files,
-                    env -> {
-                        env.put("LD_LIBRARY_PATH", rt.getAbsolutePath());
-                        env.put("HOME", files.getAbsolutePath());
-                        env.put("TMPDIR", files.getAbsolutePath());
-                    }, 30000);
+                    env -> DshRuntime.applyEnv(env, this), 30000);
             say("node exec: " + a.toString().trim());
 
             // ---- 3. unpack the dsh bundle ----
@@ -112,6 +108,9 @@ public class MainActivity extends Activity {
             } else {
                 say("dsh bundle already extracted");
             }
+
+            // ---- 3b. executables must live in nativeLibraryDir, not here ----
+            DshRuntime.linkExecutables(this, nld);
 
             // ---- 4. Termux is the bash backend, nothing more ----
             say("Termux dispatch: " + TermuxDispatch.dispatchEcho(this).trim());

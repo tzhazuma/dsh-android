@@ -9,3 +9,15 @@ downloads/
 *.apk
 *.tar.gz
 *.tgz
+
+# --- scratch / intermediate artefacts (added 2026-10-17) ---
+# rt/ is the staging area for the Termux Node runtime; the authoritative copies
+# live in android-app/app/src/main/{jniLibs,assets}. Keeping both duplicated
+# ~190 MB in git for no reason.
+rt/
+bundle/
+tools/ripgrep-android/
+logs-emulator.log
+android-app/.gradle/
+android-app/app/build/
+android-app/build/

@@ -40,6 +40,91 @@ public final class DshRuntime {
     }
 
     /**
+     * The environment the bundled Node runtime must run under.
+     *
+     * LD_LIBRARY_PATH / HOME / TMPDIR are the obvious ones. OPENSSL_CONF is not
+     * obvious and was found the hard way:
+     *
+     * The bundled libcrypto.so.3 comes from Termux, whose OpenSSL build baked
+     *   OPENSSLDIR = /data/data/com.termux/files/usr/etc/tls
+     * into the library. Our app uid can never read that path, and OpenSSL
+     * treats an unreadable config file as a FATAL error:
+     *   "OpenSSL configuration error: ... BIO_new_file:Permission denied ...
+     *    calling fopen(/data/data/com.termux/files/usr/etc/tls/openssl.cnf, rb)"
+     * which aborts Node before it runs a single line of JavaScript.
+     * Pointing OPENSSL_CONF at an empty config we own removes the dependency on
+     * Termux's private directory entirely. (Node's TLS trust store is its own
+     * bundled CA list, so no real OpenSSL configuration is needed.)
+     */
+    public static void applyEnv(java.util.Map<String, String> env, Context ctx) {
+        File files = ctx.getFilesDir();
+        env.put("LD_LIBRARY_PATH", rtDir(ctx).getAbsolutePath());
+        env.put("HOME", files.getAbsolutePath());
+        env.put("TMPDIR", files.getAbsolutePath());
+        env.put("PATH", "/system/bin:/system/xbin");
+        env.put("OPENSSL_CONF", ensureOpensslConf(ctx).getAbsolutePath());
+    }
+
+    /** Create (once) an empty-but-valid OpenSSL config inside our own data dir. */
+    public static File ensureOpensslConf(Context ctx) {
+        File conf = new File(ctx.getFilesDir(), "openssl.cnf");
+        if (!conf.isFile()) {
+            try (Writer w = new OutputStreamWriter(new FileOutputStream(conf), "UTF-8")) {
+                w.write("# dsh-android: intentionally empty.\n"
+                        + "# Exists only so the Termux-built libcrypto does not try to\n"
+                        + "# read its compiled-in OPENSSLDIR inside Termux's private data.\n");
+            } catch (Exception e) {
+                LogFile.log(TAG, "could not write openssl.cnf: " + e);
+            }
+        }
+        return conf;
+    }
+
+    /**
+     * Executables shipped inside the APK bundle must be re-pointed at
+     * nativeLibraryDir.
+     *
+     * Android 10+ forbids execve of files under the app's DATA directory (SELinux
+     * untrusted_app has no execute on app_data_file). The check is on the resolved
+     * inode, so a *symlink* in the data dir pointing at a real file in
+     * nativeLibraryDir (labelled apk_data_file, which IS executable) works fine.
+     *
+     * This bit us twice, and the second time silently:
+     *   - ripgrep: spawnSync -> EACCES.
+     *   - landlock-run: probe() reported "unusable", which looks exactly like the
+     *     kernel not supporting Landlock. It was really exec being denied.
+     *
+     * So every bundled executable ships twice: as a real file in the zip (so
+     * require.resolve and packaging see it) and as lib&lt;name&gt;.so in jniLibs,
+     * then symlinked here.
+     */
+    public static void linkExecutables(Context ctx, File nativeLibraryDir) {
+        String[][] pairs = {
+                {"node_modules/@vscode/ripgrep-android-arm64/bin/rg", "librg.so"},
+                {"node_modules/@deepseek-ai/node-addon-system-android-arm64/bin/landlock-run",
+                        "liblandlockrun.so"},
+        };
+        for (String[] pair : pairs) {
+            File link = new File(dshDir(ctx), pair[0]);
+            File target = new File(nativeLibraryDir, pair[1]);
+            try {
+                if (!target.isFile()) {
+                    LogFile.log(TAG, "linkExecutables: missing " + target);
+                    continue;
+                }
+                if (link.exists()) {
+                    //noinspection ResultOfMethodCallIgnored
+                    link.delete();
+                }
+                android.system.Os.symlink(target.getAbsolutePath(), link.getAbsolutePath());
+                LogFile.log(TAG, "linked " + pair[0] + " -> " + target);
+            } catch (Throwable t) {
+                LogFile.log(TAG, "linkExecutables failed for " + pair[0] + ": " + t);
+            }
+        }
+    }
+
+    /**
      * Start `dsh web`. Returns the Process so the caller can kill it.
      *
      * --expose-internals is required because node-addon-require-builtin has NO
@@ -63,10 +148,7 @@ public final class DshRuntime {
 
         ProcessBuilder pb = new ProcessBuilder(cmd);
         pb.directory(dsh);
-        pb.environment().put("LD_LIBRARY_PATH", rt.getAbsolutePath());
-        pb.environment().put("HOME", files.getAbsolutePath());
-        pb.environment().put("TMPDIR", files.getAbsolutePath());
-        pb.environment().put("PATH", "/system/bin:/system/xbin");
+        applyEnv(pb.environment(), ctx);
         LogFile.log(TAG, "exec: " + String.join(" ", cmd));
 
         final Process p = pb.start();

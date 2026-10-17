@@ -1,0 +1,57 @@
+############ dsh native APK -- full boot log (emulator-5554, Android 16, arm64-v8a) ############
+15:02:37.852 [DshAndroid] === dsh native APK boot ===
+15:02:37.884 [DshAndroid] targetSdk=35 nativeLibraryDir=/data/app/~~f4sHkEj5h_XOAa_tozRlIA==/com.dsh.android-Nut624fsNbB_gjPmX1xn1w==/lib/arm64
+15:02:39.106 [DshAndroid] extracted runtime assets: 11
+15:02:39.148 [DshAndroid] node=/data/app/~~f4sHkEj5h_XOAa_tozRlIA==/com.dsh.android-Nut624fsNbB_gjPmX1xn1w==/lib/arm64/libnode.so exists=true canExec=true
+15:02:39.752 [DshAndroid] node exec: rc=0
+stdout:
+NODE_OK v26.4.0 android/arm64
+15:02:39.753 [DshAndroid] extracting dsh bundle (this takes a moment)...
+15:02:45.197 [DshAndroid] extracted 25949 files in 5441 ms
+15:02:45.198 [DshRuntime] linked node_modules/@vscode/ripgrep-android-arm64/bin/rg -> /data/app/~~f4sHkEj5h_XOAa_tozRlIA==/com.dsh.android-Nut624fsNbB_gjPmX1xn1w==/lib/arm64/librg.so
+15:02:45.199 [DshRuntime] linked node_modules/@deepseek-ai/node-addon-system-android-arm64/bin/landlock-run -> /data/app/~~f4sHkEj5h_XOAa_tozRlIA==/com.dsh.android-Nut624fsNbB_gjPmX1xn1w==/lib/arm64/liblandlockrun.so
+15:02:45.256 [DshTermux] permission com.termux.permission.RUN_COMMAND granted=true
+DISPATCH_OK via startForegroundService
+
+15:02:45.256 [DshTermux] proof file on our side: /data/user/0/com.dsh.android/files/termux-result.txt
+15:02:45.256 [DshAndroid] Termux dispatch: permission com.termux.permission.RUN_COMMAND granted=true
+DISPATCH_OK via startForegroundService
+15:02:45.257 [DshAndroid] starting dsh web on port 8899 ...
+15:02:45.262 [DshRuntime] exec: /data/app/~~f4sHkEj5h_XOAa_tozRlIA==/com.dsh.android-Nut624fsNbB_gjPmX1xn1w==/lib/arm64/libnode.so --expose-internals /data/user/0/com.dsh.android/files/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js web --no-open --port 8899
+15:02:45.275 [DshAndroid] dsh web launched, pid=ok
+15:02:45.275 [DshAndroid] === boot done ===
+15:02:49.099 [DshRuntime] dsh| dsh web: http://127.0.0.1:8899/?token=aurvVPa2qHG_tMD7fdhVYGRVdPZyk_Hi4UtaJfPHqUc
+15:02:49.111 [DshAndroid] DSH_WEB_URL http://127.0.0.1:8899/?token=aurvVPa2qHG_tMD7fdhVYGRVdPZyk_Hi4UtaJfPHqUc
+
+############ module verification inside the installed APK ############
+== node ==
+NODE v26.4.0 android arm64
+== koffi ==
+KOFFI_OK 3.1.1
+== node-pty ==
+PTY_OK "PTY_OK"
+== sharp ==
+SHARP_OK 0.35.5 libvips 8.18.7
+== sharp pipeline ==
+SHARP_PIPELINE_OK 2x2 px 38,217,128,70,185,128,170,85,128,202,53,128
+== ripgrep ==
+RG_PATH /data/app/~~f4sHkEj5h_XOAa_tozRlIA==/com.dsh.android-Nut624fsNbB_gjPmX1xn1w==/lib/arm64/librg.so
+RG_RUN ripgrep 15.2.0
+== flock ==
+FLOCK_OK fd=19
+== landlock ==
+LAUNCHER /data/user/0/com.dsh.android/files/dsh/node_modules/@deepseek-ai/node-addon-system-android-arm64/bin/landlock-run
+PROBE "unusable"
+== landlock direct (real reason?) ==
+landlock-run: landlock is not enforced by this kernel (ABI unsupported or disabled)
+PROBE_RC=125
+== libreoffice-kit ==
+LOKIT_OK
+== protobufjs ==
+PROTOBUFJS_OK
+== sherpa ==
+SHERPA_FAIL Could not find sherpa-onnx-node. Tried
+MODTESTS_DONE
+
+############ Termux-side proof file (written BY the Termux uid) ############
+BRIDGE_OK Sat Oct 17 15:02:46 CST 2026 uid=10221 pwd=/data/data/com.termux/files/home
