@@ -1,0 +1,8 @@
+{
+  "name": "@deepseek-ai/node-addon-system-android-arm64",
+  "version": "0.1.2",
+  "description": "Android arm64 build of the node-addon-system primitives, cross-compiled with NDK r28 for aarch64-linux-android (API 24). Built by dsh-android because upstream publishes no android package.",
+  "license": "BSD-3-Clause",
+  "os": ["android"],
+  "cpu": ["arm64"]
+}

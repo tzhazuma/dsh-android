@@ -1,0 +1,15 @@
+--- a/node_modules/@deepseek-ai/node-addon-system/lib/flock.js
++++ b/node_modules/@deepseek-ai/node-addon-system/lib/flock.js
+@@ -7,7 +7,9 @@
+ function loadBinding() {
+     if (binding)
+         return binding;
+     const { platform, arch } = process;
+-    if (platform !== 'linux' && platform !== 'darwin') {
++    // dsh-android: Node on Android reports process.platform === 'android'.
++    // bionic provides flock(2) exactly like glibc, so the platform gate is
++    // the only thing standing in the way.
++    if (platform !== 'linux' && platform !== 'darwin' && platform !== 'android') {
+         throw Object.assign(new Error(`flock is not supported on ${platform}-${arch}`), {
+             code: 'ERR_FLOCK_UNSUPPORTED_PLATFORM',
+             syscall: 'flock',
