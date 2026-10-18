@@ -803,3 +803,29 @@ dsh web: http://127.0.0.1:8899/?token=aurvVPa2qHG_...
     └── logs/dsh-apk-emulator-e2e.txt             ⭐ 全量端到端证据
 ```
 
+
+## The web host could not start: the port belonged to Termux
+
+`dsh web` was launched with a hard-coded `--port 8899`. On this device 8899 is
+already held by Termux (uid 10238), so the start failed two seconds in:
+
+    I DshRuntime: dsh web exited rc=1
+    ... Error: listen EADDRINUSE: address already in use 127.0.0.1:8899
+    ... webserver (required) failed to activate
+
+and because webserver is a *required* plugin, dsh aborted the whole host: nine other
+plugins stayed "waiting for services", the WebView never received a URL, and the UI
+showed nothing but the boot log.
+
+`DshRuntime.pickFreePort()` now bind-tests 8900..8920 and uses the first free one.
+Verified on the vivo PA2573:
+
+    I DshRuntime: exec: libnode.so ... web --no-open --port 8900
+    I DshRuntime: dsh| dsh web: http://127.0.0.1:8900/?token=...
+    I DshAndroid: DSH_WEB_URL http://127.0.0.1:8900/?token=...
+
+and the Web GUI renders in the app: sidebar (新会话 / 插件 / 工作区 / 设置) and the
+预览版说明 dialog.
+
+The launcher icon is the harness's own artwork (the whale, from the desktop
+application's Resources/icon.png), replacing a stand-in prompt chevron.

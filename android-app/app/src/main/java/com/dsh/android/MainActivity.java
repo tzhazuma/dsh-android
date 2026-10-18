@@ -116,7 +116,8 @@ public class MainActivity extends Activity {
             say("Termux dispatch: " + TermuxDispatch.dispatchEcho(this).trim());
 
             // ---- 5. start the dsh host ----
-            say("starting dsh web on port " + DshRuntime.PORT + " ...");
+            // The port is chosen inside startWeb (see DshRuntime.pickFreePort), so it can
+            // only be reported after the launch.
             dshProcess = DshRuntime.startWeb(this, nld, new DshRuntime.Listener() {
                 @Override public void onUrl(String url) {
                     say("DSH_WEB_URL " + url);
@@ -126,7 +127,8 @@ public class MainActivity extends Activity {
                     say("dsh web process exited rc=" + rc);
                 }
             });
-            say("dsh web launched, pid=" + (dshProcess != null ? "ok" : "?"));
+            say("dsh web launched on port " + DshRuntime.port()
+                    + ", pid=" + (dshProcess != null ? "ok" : "?"));
             say("=== boot done ===");
         } catch (Throwable t) {
             say("BOOT_EXCEPTION " + t);

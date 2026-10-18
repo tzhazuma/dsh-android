@@ -22,9 +22,49 @@ import java.util.regex.Pattern;
  */
 public final class DshRuntime {
     private static final String TAG = "DshRuntime";
-    /** dsh prints `dsh web: http://127.0.0.1:PORT/?token=...` on stdout. */
+    /**
+     * dsh prints `dsh web: http://127.0.0.1:PORT/?token=...` on stdout.
+     *
+     * <p>The port is no longer a constant. It was 8899, and on this device 8899 is already
+     * held by Termux's own listener: `dsh web` then died with
+     * {@code EADDRINUSE: address already in use 127.0.0.1:8899} two seconds after launch,
+     * the webserver plugin never activated, and the WebView stayed empty with nothing but
+     * "rc=1" in the log. A port that another application happens to own is not something
+     * this app can promise, so it searches for a free one instead.
+     */
     private static final Pattern URL = Pattern.compile("http://127\\.0\\.0\\.1:\\d+/\\?token=[A-Za-z0-9_-]+");
-    public static final int PORT = 8899;
+    public static final int FIRST_PORT = 8900;
+    public static final int LAST_PORT = 8920;
+
+    private static volatile int port = FIRST_PORT;
+
+    /** The port the current (or next) dsh web host binds. */
+    public static int port() {
+        return port;
+    }
+
+    /**
+     * Bind-test each port in range and return the first that works.
+     *
+     * <p>Binding and immediately closing leaves a race -- another process could take the
+     * port in between -- but Node re-checks anyway, and a lost race only costs one retry
+     * on the next launch. Being wrong about a *fixed* port is worse: it fails every time.
+     */
+    public static int pickFreePort() {
+        for (int p = FIRST_PORT; p <= LAST_PORT; p++) {
+            try (java.net.ServerSocket s = new java.net.ServerSocket()) {
+                s.bind(new java.net.InetSocketAddress(
+                        java.net.InetAddress.getByName("127.0.0.1"), p));
+                port = p;
+                return p;
+            }
+            catch (Throwable ignored) {
+                // taken (or reserved); try the next one
+            }
+        }
+        port = FIRST_PORT;
+        return port;
+    }
 
     public interface Listener {
         void onUrl(String url);
@@ -144,7 +184,7 @@ public final class DshRuntime {
                 node.getAbsolutePath(),
                 "--expose-internals",
                 bin.getAbsolutePath(),
-                "web", "--no-open", "--port", String.valueOf(PORT));
+                "web", "--no-open", "--port", String.valueOf(pickFreePort()));
 
         ProcessBuilder pb = new ProcessBuilder(cmd);
         pb.directory(dsh);
