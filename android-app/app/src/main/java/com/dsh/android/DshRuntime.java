@@ -101,7 +101,13 @@ public final class DshRuntime {
         env.put("LD_LIBRARY_PATH", rtDir(ctx).getAbsolutePath());
         env.put("HOME", files.getAbsolutePath());
         env.put("TMPDIR", files.getAbsolutePath());
-        env.put("PATH", "/system/bin:/system/xbin");
+        // filesDir/bin holds the `saf` command (the SAF contract, usable from
+        // dsh's shell) -- putting it on PATH is what makes `saf open` work from
+        // any command dsh runs.
+        env.put("PATH", "/system/bin:/system/xbin:" + new File(files, "bin").getAbsolutePath());
+        // The SAF CLI needs to find filesDir without guessing: HOME is filesDir,
+        // but make it explicit.
+        env.put("DSH_SAF_DIR", files.getAbsolutePath());
         env.put("OPENSSL_CONF", ensureOpensslConf(ctx).getAbsolutePath());
     }
 
@@ -152,9 +158,13 @@ public final class DshRuntime {
                     LogFile.log(TAG, "linkExecutables: missing " + target);
                     continue;
                 }
-                if (link.exists()) {
-                    //noinspection ResultOfMethodCallIgnored
-                    link.delete();
+                // unlink unconditionally: exists() follows the link, so a stale
+                // link would otherwise fail symlink() with EEXIST and be logged
+                // as an error on every boot.
+                try {
+                    java.nio.file.Files.deleteIfExists(
+                            java.nio.file.Paths.get(link.getAbsolutePath()));
+                } catch (Throwable ignored) {
                 }
                 android.system.Os.symlink(target.getAbsolutePath(), link.getAbsolutePath());
                 LogFile.log(TAG, "linked " + pair[0] + " -> " + target);

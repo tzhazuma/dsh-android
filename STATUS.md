@@ -829,3 +829,134 @@ and the Web GUI renders in the app: sidebar (新会话 / 插件 / 工作区 / �
 
 The launcher icon is the harness's own artwork (the whale, from the desktop
 application's Resources/icon.png), replacing a stand-in prompt chevron.
+
+---
+
+# Round 3 (2026-10-19): foreground service, SAF open/save, real icon, device findings
+
+## 10.1 Foreground service owns Node now (DshService)
+
+The host used to live inside `MainActivity`. Task switches could freeze and reclaim it,
+and the WebView lost its server. It now lives in `com.dsh.android.DshService`:
+
+* started with `startForegroundService()`, calls `startForeground()` **before** any slow
+  work (first-run bundle extraction is 30 s+),
+* `foregroundServiceType="specialUse"` + `PROPERTY_SPECIAL_USE_FGS_SUBTYPE`, `START_STICKY`,
+  `android:stopWithTask="false"`, `onTaskRemoved` deliberately does not stop,
+* `BootLog` is the process-wide status ring buffer; the activity merely renders it and
+  loads `BootLog.url()` when it appears, so activity re-creation is harmless.
+
+Verified on device:
+
+    $ adb shell dumpsys activity services | grep -n DshService
+    11348:  * ServiceRecord{916f422 u0 com.dsh.android/.DshService c:com.dsh.android}
+    ...
+    12:30:00.335 [DshAndroid] === dsh native APK boot (foreground service) ===
+    12:30:02.600 [DshRuntime] dsh| dsh web: http://127.0.0.1:8900/?token=...
+    12:30:02.601 [DshAndroid] DSH_WEB_URL http://127.0.0.1:8900/?token=...
+
+`dumpsys activity services com.dsh.android` (package filter argument) does **not** list
+DshService — grep the unfiltered output, or you will wrongly conclude the service is dead.
+
+## 10.2 SAF: the six-method contract, implemented for a Node host
+
+`SafBridge.java` implements the shared contract verbatim:
+
+    safPickOpen()V  safIsDone()Z  safPickSave(String)V
+    safSaveDone()Z  safHasSaveUri()Z  safPublish(String)Z
+
+Because dsh is Node, a Node process cannot JNI-call the Activity. So the same six
+operations are also exposed as a command, `filesDir/bin/saf` (+ `saf.js`, written at boot
+with absolute paths baked in; `filesDir/bin` is appended to the host's PATH and
+`DSH_SAF_DIR` is exported):
+
+    saf open [--into DIR]      # ACTION_OPEN_DOCUMENT, copies picks to filesDir/saf-inbox,
+                               # writes filesDir/saf-manifest.txt (one path per line)
+    saf save <file> [--name N] # ACTION_CREATE_DOCUMENT, then publishes
+    saf state
+
+Wire format (filesystem only, as the contract requires):
+
+    filesDir/saf/req           <seq>\n<open|save>\n<arg>\n     (save arg = "title\t srcPath")
+    filesDir/saf/res           <seq>\n<pending|done|error|cancelled>\n<message>
+    filesDir/saf-manifest.txt  imported local paths
+    filesDir/saf-target-uri.txt the chosen content:// URI
+
+The watcher thread polls `req` and turns it into `startActivityForResult` **via
+runOnUiThread** (without that the picker silently never appears). Save is two-stage:
+scratch file under `filesDir/export/` → picker on the UI thread → `safPublish()` waits
+for the scratch file to stop growing for 1.5 s → streams it to the URI.
+
+The WebView also routes `<input type=file>` through `onShowFileChooser` →
+ACTION_OPEN_DOCUMENT, so dsh's own upload widgets land in the same vivo picker.
+
+Picker on this ROM: `com.android.filemanager/.selector.view.SelectorHomeActivity`.
+`com.android.documentsui` is a shim — never test for it.
+
+## 10.3 dsh could not persist a session: SELinux denies link(2) in app data
+
+First real prompt on device failed at the persistence layer:
+
+    EACCES: permission denied, link
+      '.../sessions/--data-data-com.dsh.android-files-dsh--/session-<id>/session.v4.jsonl.zstd.<tmp>'
+      -> '.../session.v4.jsonl.zstd'
+
+Directly reproducible:
+
+    $ adb shell "run-as com.dsh.android sh -c 'cd files && echo hi > t1 && ln t1 t2'"
+    ln: cannot create hard link from 't1' to 't2': Permission denied
+
+`@deepseek-ai/dsh-session-persistence-jsonl` publishes the current generation with
+`fs.link()` for EEXIST semantics. Patch
+(`patches/0002-session-persistence-hardlink-android.patch`) adds an exclusive
+`copyFile(..., COPYFILE_EXCL)` fallback on EACCES/EPERM/ENOTSUP/EXDEV/EOPNOTSUPP.
+It is applied to `assets/dsh-bundle.zip` itself (both `lib/index.js` and `lib/worker.cjs`)
+and the extraction marker was bumped to `.extracted-v2` so existing installs re-extract.
+
+## 10.4 Icon provenance: the real DSH favicon, not a stand-in
+
+Source asset, extracted from the desktop app's asar:
+
+    /Applications/DeepSeek Harness.app/Contents/Resources/app.asar
+      -> dsh/node_modules/@deepseek-ai/dsh-web-frontend/dist/favicon.svg
+      sha256 9e983b4f649c25c6ca0623a50be1a6e705fd8f49f756638b980fa13b40575ab6
+
+(asar layout note for future rounds: JSON header starts at byte 16, **file data starts at
+8 + headerSize**, not 16 + headerSize.)
+
+The SVG was rendered with `rsvg-convert` and re-composited to: mipmap-mdpi..xxxhdpi
+`ic_launcher.png` + `ic_launcher_round.png`, and `drawable/ic_launcher_foreground.png`
+(432 px, 60 % safe zone) + `drawable/ic_launcher_monochrome.png` for
+`mipmap-anydpi-v26/ic_launcher.xml` (adaptive). Verified against the artefact:
+
+    application-icon-160:'res/mipmap-anydpi-v26/ic_launcher.xml'
+    application-icon-240:'res/mipmap-anydpi-v26/ic_launcher.xml'
+    application-icon-320:'res/mipmap-anydpi-v26/ic_launcher.xml'
+    application-icon-480:'res/mipmap-anydpi-v26/ic_launcher.xml'
+    application-icon-640:'res/mipmap-anydpi-v26/ic_launcher.xml'
+
+## 10.5 ⚠️ Device/install facts learned the hard way
+
+* **`pm install` is not headless on this ROM.** It starts
+  `com.android.packageinstaller/.PackageInterceptActivity` ("安全守护提示您",
+  checkbox 已了解应用的风险检测结果, button 继续安装). If the screen is **locked**
+  (`dumpsys window | grep mDreamingLockscreen` → true) the install is refused instantly
+  with `INSTALL_FAILED_ABORTED: User rejected permissions`; if it is unlocked you must
+  tick the checkbox at (1548,1809) and press 继续安装 at (1547,1936) (Rotation0), or the
+  `pm install` blocks for minutes and then reports the same failure.
+  `uiautomator dump` gives exact bounds — prefer it over hard-coded coordinates.
+* The device is shared with other ports' agents. `topResumedActivity` may be another
+  app's picker mid-test; check it before every tap.
+* Wireless debugging drops when the Mac changes networks; the phone must be on the same
+  SSID. Symptom: `ping 192.168.0.108` 100 % loss and stale `10.20.x.x offline` adb
+  entries. `~/adb-up.sh --scan` cannot find it across subnets.
+
+## 10.6 State of verification at the end of this round
+
+Done and evidenced on the vivo device: foreground service hosts dsh web, WebView renders
+the full GUI, Termux dispatch is `DISPATCH_OK via startForegroundService`, SAF bridge and
+CLI are installed at boot, session-persistence failure root-caused and patched.
+
+NOT yet re-verified after the rebuild (device left the network mid-round): the patched
+session publish, a full model answer in the app UI, and the SAF picker round-trip.
+The APK that carries all of the above is `dist/dsh-android-0.3.0-arm64-debug.apk`.

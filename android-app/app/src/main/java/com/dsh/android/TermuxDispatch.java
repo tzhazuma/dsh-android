@@ -1,6 +1,5 @@
 package com.dsh.android;
 
-import android.app.Activity;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
@@ -72,7 +71,7 @@ public final class TermuxDispatch {
     }
 
     /** Proof-of-life: run a command in Termux that leaves a result file behind. */
-    public static String dispatchEcho(Activity a) {
+    public static String dispatchEcho(Context a) {
         File proof = new File(a.getFilesDir(), "termux-result.txt");
         String script = "echo \"BRIDGE_OK $(date) uid=$(id -u) pwd=$(pwd)\" > "
                 + "/data/data/com.termux/files/home/dshx/termux_proof.txt; "

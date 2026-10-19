@@ -1,0 +1,69 @@
+--- a/node_modules/@deepseek-ai/dsh-session-persistence-jsonl/lib/index.js	2026-10-16 02:10:15.000000000 +0800
++++ b/node_modules/@deepseek-ai/dsh-session-persistence-jsonl/lib/index.js	2026-10-19 12:48:50.663348632 +0800
+@@ -1,7 +1,7 @@
+ import z from "@deepseek-ai/schemastery";
+ import { SessionFormatUnsupportedMigrationError, createSessionFormatCatalogWithChildren, historicalSessionFormatCatalog, sessionFormatCatalog } from "@deepseek-ai/dsh-session-format-catalog";
+ import { readdirSync } from "node:fs";
+-import { link, lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rm, stat, truncate } from "node:fs/promises";
++import { copyFile, link, lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rm, stat, truncate } from "node:fs/promises";
+ import { basename, dirname, isAbsolute, join, parse, resolve, toNamespacedPath } from "node:path";
+ import { performance } from "node:perf_hooks";
+ import { scheduler } from "node:timers/promises";
+@@ -1608,6 +1608,7 @@
+ 	stat: (path) => stat(path, { bigint: true }),
+ 	lstat: (path) => lstat(path),
+ 	link,
++	copyFile: (source, destination, flags) => copyFile(source, destination, flags),
+ 	rm: (path) => rm(path, { force: true })
+ };
+ const defaultInternals = {
+@@ -2035,6 +2036,19 @@
+ 	} catch (error) {
+ 		/* v8 ignore else -- a non-collision filesystem error propagates unchanged. */
+ 		if (isEEXIST(error)) return false;
++		if (error && (error.code === "EACCES" || error.code === "EPERM" || error.code === "ENOTSUP" || error.code === "EXDEV" || error.code === "EOPNOTSUPP")) {
++			/* Android: SELinux denies link(2) inside app data (EACCES), and some
++			 * filesystems do not support hard links at all. Fall back to an
++			 * exclusive copy so session logs still publish. */
++			try {
++				await internals.fs.copyFile(staged, currentPath, 1 /* COPYFILE_EXCL */);
++			} catch (copyError) {
++				if (isEEXIST(copyError)) return false;
++				throw copyError;
++			}
++			await internals.fs.rm(staged);
++			return true;
++		}
+ 		/* v8 ignore next -- the filesystem error is already complete. */
+ 		throw error;
+ 	}
+--- a/node_modules/@deepseek-ai/dsh-session-persistence-jsonl/lib/worker.cjs	2026-10-16 02:10:15.000000000 +0800
++++ b/node_modules/@deepseek-ai/dsh-session-persistence-jsonl/lib/worker.cjs	2026-10-19 12:49:30.693173755 +0800
+@@ -12554,6 +12554,7 @@
+ 	stat: (path) => (0, node_fs_promises.stat)(path, { bigint: true }),
+ 	lstat: (path) => (0, node_fs_promises.lstat)(path),
+ 	link: node_fs_promises.link,
++	copyFile: (source, destination, flags) => (0, node_fs_promises.copyFile)(source, destination, flags),
+ 	rm: (path) => (0, node_fs_promises.rm)(path, { force: true })
+ };
+ const defaultInternals = {
+@@ -12982,6 +12983,19 @@
+ 	} catch (error) {
+ 		/* v8 ignore else -- a non-collision filesystem error propagates unchanged. */
+ 		if (isEEXIST(error)) return false;
++		if (error && (error.code === "EACCES" || error.code === "EPERM" || error.code === "ENOTSUP" || error.code === "EXDEV" || error.code === "EOPNOTSUPP")) {
++			/* Android: SELinux denies link(2) inside app data (EACCES), and some
++			 * filesystems do not support hard links at all. Fall back to an
++			 * exclusive copy so session logs still publish. */
++			try {
++				await internals.fs.copyFile(staged, currentPath, 1 /* COPYFILE_EXCL */);
++			} catch (copyError) {
++				if (isEEXIST(copyError)) return false;
++				throw copyError;
++			}
++			await internals.fs.rm(staged);
++			return true;
++		}
+ 		/* v8 ignore next -- the filesystem error is already complete. */
+ 		throw error;
+ 	}
