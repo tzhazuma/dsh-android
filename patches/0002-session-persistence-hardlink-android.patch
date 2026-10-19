@@ -1,5 +1,5 @@
 --- a/node_modules/@deepseek-ai/dsh-session-persistence-jsonl/lib/index.js	2026-10-16 02:10:15.000000000 +0800
-+++ b/node_modules/@deepseek-ai/dsh-session-persistence-jsonl/lib/index.js	2026-10-19 12:48:50.663348632 +0800
++++ b/node_modules/@deepseek-ai/dsh-session-persistence-jsonl/lib/index.js	2026-10-20 03:06:16.827561684 +0800
 @@ -1,7 +1,7 @@
  import z from "@deepseek-ai/schemastery";
  import { SessionFormatUnsupportedMigrationError, createSessionFormatCatalogWithChildren, historicalSessionFormatCatalog, sessionFormatCatalog } from "@deepseek-ai/dsh-session-format-catalog";
@@ -37,6 +37,23 @@
  		/* v8 ignore next -- the filesystem error is already complete. */
  		throw error;
  	}
+@@ -3139,7 +3153,15 @@
+ 		const tmp = await this.writeSyncedTempFile(finalPath, content);
+ 		let linked = false;
+ 		try {
+-			await link(tmp, finalPath);
++			try {
++				await link(tmp, finalPath);
++			} catch (linkError) {
++				/* Android: SELinux denies link(2) inside app data (EACCES); some
++				 * filesystems also reject hard links. An exclusive copy keeps the
++				 * "never overwrite an existing log" guarantee. */
++				if (!(linkError && (linkError.code === "EACCES" || linkError.code === "EPERM" || linkError.code === "ENOTSUP" || linkError.code === "EXDEV" || linkError.code === "EOPNOTSUPP"))) throw linkError;
++				await copyFile(tmp, finalPath, 1 /* COPYFILE_EXCL */);
++			}
+ 			linked = true;
+ 		} finally {
+ 			/* v8 ignore next -- link failure is the TOCTOU/IO race guarded above; not reachable in test */
 --- a/node_modules/@deepseek-ai/dsh-session-persistence-jsonl/lib/worker.cjs	2026-10-16 02:10:15.000000000 +0800
 +++ b/node_modules/@deepseek-ai/dsh-session-persistence-jsonl/lib/worker.cjs	2026-10-19 12:49:30.693173755 +0800
 @@ -12554,6 +12554,7 @@

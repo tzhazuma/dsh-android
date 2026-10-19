@@ -58,6 +58,7 @@ public final class SafBridge {
     private static volatile boolean hasSaveUri;
     private static volatile String lastError = "";
     private static volatile long handledSeq = -1;
+    private static volatile boolean resumed;
 
     private static Thread watcher;
 
@@ -138,6 +139,11 @@ public final class SafBridge {
     public static void attach(Activity a) {
         activity = new WeakReference<>(a);
         startWatcher(a.getApplicationContext());
+    }
+
+    /** Called from MainActivity.onResume/onPause. */
+    public static void setResumed(boolean r) {
+        resumed = r;
     }
 
     public static void detach() {
@@ -253,8 +259,16 @@ public final class SafBridge {
                     currentSeq = seq;
                     current_op = op;
                     current_arg = arg;
+                    // Do not launch from the background: Android denies background
+                    // activity starts, and the request would sit unanswered while
+                    // another app owns the foreground. Wait for our activity.
+                    for (int i = 0; i < 600 && !resumed; i++) Thread.sleep(250);
                     final Activity a = activity.get();
                     if (a == null) continue;
+                    if (!resumed) {
+                        writeResult(seq, "error", "activity never resumed");
+                        continue;
+                    }
                     a.runOnUiThread(() -> launch(a, op, arg));
                 } catch (InterruptedException ie) {
                     return;
@@ -459,6 +473,12 @@ public final class SafBridge {
     private static final String SHELL_CLI =
             "#!/system/bin/sh\n"
             + "# dsh SAF front door: writes filesDir/saf/req, prints the result.\n"
+            + "FILES=@FILES@\n"
+            + "export HOME=\"$FILES\"\n"
+            + "export TMPDIR=\"$FILES\"\n"
+            + "export OPENSSL_CONF=\"$FILES/openssl.cnf\"\n"
+            + "export DSH_SAF_DIR=\"$FILES\"\n"
+            + "export LD_LIBRARY_PATH=\"$FILES/rt\"\n"
             + "exec \"@NODE@\" --expose-internals \"@JS@\" \"$@\"\n";
 
     private static final String JS_CLI =
@@ -538,7 +558,8 @@ public final class SafBridge {
             }
             String shell = SHELL_CLI
                     .replace("@NODE@", node.getAbsolutePath())
-                    .replace("@JS@", js.getAbsolutePath());
+                    .replace("@JS@", js.getAbsolutePath())
+                    .replace("@FILES@", c.getFilesDir().getAbsolutePath());
             try (FileOutputStream fos = new FileOutputStream(sh)) {
                 fos.write(shell.getBytes(StandardCharsets.UTF_8));
             }

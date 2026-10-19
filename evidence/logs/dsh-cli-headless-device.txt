@@ -1,0 +1,5 @@
+=== dsh headless on vivo PA2573 (Android 16/arm64), default model (deepseek-account/deepseek-flash high) ===
+date: Tue Oct 20 03:09:18 CST 2026
+cmd: libnode.so --expose-internals node_modules/@deepseek-ai/dsh/lib/bin.js headless "Reply with exactly DEVICE_PROMPT_OK"
+--- output ---
+DEVICE_PROMPT_OK

@@ -1,0 +1,15 @@
+=== SAF OPEN round-trip (vivo PA2573) ===
+date: Tue Oct 20 04:58:02 CST 2026
+1) picker activity seen in topResumedActivity:
+com.android.filemanager/.selector.view.SelectorHomeActivity
+2) dsh.log (SafBridge):
+04:45:48.607 [DshSaf] launched OPEN_DOCUMENT
+04:45:48.628 [DshSaf] installed SAF CLI /data/user/0/com.dsh.android/files/bin/saf and /data/user/0/com.dsh.android/files/bin/saf.js
+04:47:14.833 [DshSaf] launched OPEN_DOCUMENT
+04:47:14.854 [DshSaf] installed SAF CLI /data/user/0/com.dsh.android/files/bin/saf and /data/user/0/com.dsh.android/files/bin/saf.js
+3) filesDir/saf-manifest.txt:
+/data/user/0/com.dsh.android/files/saf-inbox/1792442743697-dsh-open-test.txt
+4) imported copy, content verified:
+DSH_SAF_OPEN_OK round3 from Downloads
+   (source /sdcard/Download/dsh-open-test.txt:)
+DSH_SAF_OPEN_OK round3 from Downloads

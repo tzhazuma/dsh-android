@@ -7,8 +7,12 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.view.Window;
+import android.view.WindowInsets;
+import android.view.WindowInsetsController;
 import android.util.TypedValue;
 import android.view.Gravity;
+import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
@@ -40,11 +44,14 @@ public class MainActivity extends Activity {
     private final Handler ui = new Handler(Looper.getMainLooper());
     private int shownGeneration = -1;
     private String loadedUrl;
+    private HorizontalScrollView barScroll;
+    private ScrollView logPanel;
     private ValueCallback<Uri[]> fileCallback;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        requestWindowFeature(Window.FEATURE_NO_TITLE);
         LogFile.init(this);
         BootLog.init(this);
         SafBridge.attach(this);
@@ -79,6 +86,7 @@ public class MainActivity extends Activity {
             render();
         }));
         hsv.addView(bar);
+        barScroll = hsv;
         root.addView(hsv, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
@@ -87,6 +95,7 @@ public class MainActivity extends Activity {
         status.setTextSize(TypedValue.COMPLEX_UNIT_SP, 9f);
         status.setPadding(20, 10, 20, 10);
         sv.addView(status);
+        logPanel = sv;
         root.addView(sv, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(170)));
 
@@ -114,6 +123,7 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
         setContentView(root);
+        hideSystemBars();
 
         // The host is a foreground service: start it once, never stop it from here.
         Intent svc = new Intent(this, DshService.class);
@@ -124,6 +134,33 @@ public class MainActivity extends Activity {
         }
 
         ui.postDelayed(this::poll, 300);
+    }
+
+    /** dsh owns the whole display: no title bar, no system bars. */
+    @SuppressWarnings("deprecation")
+    private void hideSystemBars() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            getWindow().setDecorFitsSystemWindows(false);
+            WindowInsetsController c = getWindow().getInsetsController();
+            if (c != null) {
+                c.hide(WindowInsets.Type.statusBars() | WindowInsets.Type.navigationBars());
+                c.setSystemBarsBehavior(
+                        WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+            }
+        } else {
+            getWindow().getDecorView().setSystemUiVisibility(
+                    View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                            | View.SYSTEM_UI_FLAG_FULLSCREEN
+                            | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                            | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                            | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION);
+        }
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus) hideSystemBars();
     }
 
     private Button button(String label, android.view.View.OnClickListener l) {
@@ -151,6 +188,10 @@ public class MainActivity extends Activity {
                 if (u != null) {
                     loadedUrl = u;
                     web.loadUrl(u);
+                    // The boot log is useful until the host answers, and in the
+                    // way afterwards: once dsh is live the WebView gets the full
+                    // window, exactly like the desktop app.
+                    hideBootChrome();
                 }
             }
         }
@@ -185,8 +226,28 @@ public class MainActivity extends Activity {
         super.onActivityResult(requestCode, resultCode, data);
     }
 
+    /** Collapse the diagnostics bar so the dsh UI owns the whole screen. */
+    private void hideBootChrome() {
+        ui.post(() -> {
+            if (barScroll != null) barScroll.setVisibility(View.GONE);
+            if (logPanel != null) logPanel.setVisibility(View.GONE);
+        });
+    }
+
     private int dp(int v) {
         return (int) (v * getResources().getDisplayMetrics().density);
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        SafBridge.setResumed(true);
+    }
+
+    @Override
+    protected void onPause() {
+        SafBridge.setResumed(false);
+        super.onPause();
     }
 
     @Override

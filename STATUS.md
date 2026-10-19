@@ -960,3 +960,99 @@ CLI are installed at boot, session-persistence failure root-caused and patched.
 NOT yet re-verified after the rebuild (device left the network mid-round): the patched
 session publish, a full model answer in the app UI, and the SAF picker round-trip.
 The APK that carries all of the above is `dist/dsh-android-0.3.0-arm64-debug.apk`.
+
+---
+
+# Round 4 (2026-10-20): full-screen UI, Mac model config, real prompt, SAF open
+
+## 11.1 The app now looks like the desktop app: no chrome, no boot log
+
+Round 3 hid the boot-log panel after the host URL appeared, but the window still had
+(a) the Android title bar (`Theme.Material.Light`) and (b) the system bars, and users
+reported the top of the dsh UI (logo / 新会话) being covered. Fixes:
+
+* theme is `@android:style/Theme.Material.Light.NoActionBar` plus
+  `requestWindowFeature(Window.FEATURE_NO_TITLE)`;
+* `hideSystemBars()` (WindowInsetsController on API 30+, SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+  below) plus `setDecorFitsSystemWindows(false)`, re-applied in `onWindowFocusChanged`;
+* `barScroll` / `logPanel` are `GONE` once `BootLog.url()` is known — dsh owns the whole
+  display. The log remains available at `files/dsh.log`.
+
+Verified on the vivo PA2573: logo, 新会话, 插件, 工作区, 设置 and the composer are all
+visible edge-to-edge, nothing overlaps them.
+
+## 11.2 The Mac's model configuration, ported to the Android app
+
+The desktop profile's `cordis.patch.yml` was copied to the app's web profile
+(`files/.dsh/profiles/web/cordis.patch.yml`): `agent-default-model`
+(deepseek-account / deepseek-flash / high), the whole `llm-pi-ai` provider list
+(opencode-go, deepseek, xiaomi, lmstudio, stepfun, kimi-for-coding, local-5090),
+`ui-settings-*`, and `subagent-model-selection-settings`.
+
+The credential refs from `~/.dsh/.credentials.yaml` (DEEPSEEK_API_KEY, OPENCODE_GO_API_KEY,
+XIAOMI_API_KEY, STEPFUN_API_KEY, KIMI_FOR_CODING_API_KEY, LMSTUDIO_API_KEY,
+LOCAL_5090_API_KEY) plus the `deepseek-account-platform/*` records were installed into
+`files/.dsh/.credentials.yaml`, merged with the device's own browser-session record.
+
+⚠️ **Deliberately NOT baked into the APK.** The release APK is a public GitHub asset; an
+API key inside `assets/` would be published. Keys live in the app's private data dir
+(mode 600, app uid) and a fresh install needs them re-applied (script in
+`scripts/apply-model-config.sh`, which reads the Mac's `~/.dsh` config).
+
+## 11.3 A real prompt is answered by the default model on the device
+
+`dsh headless` inside the app's own Node runtime, with the ported config:
+
+    $ adb shell run-as com.dsh.android ... bin.js headless "Reply with exactly DEVICE_PROMPT_OK"
+    DEVICE_PROMPT_OK
+
+and the same prompt through the app UI (WebView → dsh web host) produced a persisted
+session (evidence/logs/dsh-ui-session-device.jsonl, decompressed from
+`session.v4.jsonl.zstd`):
+
+    {"type":"user/message", ... "text":"Reply DEVICE_PROMPT_OK" ...}
+    {"type":"assistant/message", ... "content":[...,{"type":"text","text":"DEVICE_PROMPT_OK"}],
+     "source":{"kind":"model","provider":"deepseek-account","model":"deepseek-flash"}, ...}
+
+Screenshot: `evidence/dsh-android-0.3.0-ui-answer.png` (interface says 已完成, 用时 1 秒).
+
+## 11.4 Session persistence: `link(2)` is denied twice, not once
+
+Round 3 patched `publishCurrentExclusive`. A prompt still failed, now from
+`materializePosix`:
+
+    at async Proxy.materializePosix (dsh-session-persistence-jsonl/lib/index.js:3156)
+    EACCES: permission denied, link '...session.v4.jsonl.zstd.<tmp>' -> '...session.v4.jsonl.zstd'
+
+A `--require` hook that wraps `fs.link`/`fs.promises.link` with a stack-printing guard
+found the second call site. `materializePosix` uses the module-level `link` import, not
+the `internals.fs` wrapper, so it needed its own COPYFILE_EXCL fallback.
+`patches/0002-session-persistence-hardlink-android.patch` now covers both sites, and the
+patched files are inside `assets/dsh-bundle.zip`.
+
+## 11.5 SAF open round-trip on the vivo picker (real file)
+
+`com.android.filemanager/.selector.view.SelectorHomeActivity` is the picker. The whole
+flow was driven by the `saf` command (Node → filesystem request → Activity picker):
+
+    04:43:52 [DshSaf] imported content://com.android.providers.media.documents/document/
+             document%3A1000027124 -> .../files/saf-inbox/dsh-open-test.txt (38 bytes)
+    04:43:52 [DshSaf] open done: [.../files/saf-inbox/dsh-open-test.txt]
+
+    files/saf-manifest.txt: /data/user/0/com.dsh.android/files/saf-inbox/...-dsh-open-test.txt
+    cat files/saf-inbox/dsh-open-test.txt: DSH_SAF_OPEN_OK round3 from Downloads
+    cat /sdcard/Download/dsh-open-test.txt: DSH_SAF_OPEN_OK round3 from Downloads
+
+Full log: `evidence/logs/dsh-saf-open-device.txt`.
+
+### Two lessons that cost hours
+
+1. **`input tap` y-coordinates from a screenshot preview are not reliable at the bottom
+   of the screen.** The vivo picker's 完成 button really sits at
+   `[2716,1924][3046,2039]` (center 2881,1981), ~150 px below where a naive half-scale
+   reading put it. Use `uiautomator dump` bounds for any button that "does nothing".
+2. **The picker cannot be launched while another app owns the foreground.** Android
+   denies background activity starts, and the request then waits forever. SafBridge now
+   tracks `resumed` (set from MainActivity.onResume/onPause) and the watcher waits for it
+   (up to 150 s) instead of firing into the void. When testing on this shared device,
+   check `topResumedActivity` immediately before every tap.

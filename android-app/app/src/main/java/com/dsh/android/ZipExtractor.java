@@ -42,6 +42,15 @@ public final class ZipExtractor {
                     if (parent != null && !parent.isDirectory() && !parent.mkdirs()) {
                         throw new IOException("mkdirs failed: " + parent);
                     }
+                    // Re-extraction into a directory left behind by a previous
+                    // install: DshRuntime.linkExecutables() replaces `rg` and
+                    // `landlock-run` with symlinks into nativeLibraryDir, whose
+                    // path changes on every reinstall. Opening a FileOutputStream
+                    // through such a dangling link fails with ENOENT and kills
+                    // the whole boot. Remove the entry (File.delete unlinks the
+                    // symlink itself, never its target) before writing.
+                    //noinspection ResultOfMethodCallIgnored
+                    out.delete();
                     try (BufferedOutputStream bos =
                                  new BufferedOutputStream(new FileOutputStream(out), 1 << 16)) {
                         int r;
