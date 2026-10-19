@@ -1,0 +1,19 @@
+=== SAF SAVE round-trip (vivo PA2573, Android 16/arm64) ===
+date: Tue Oct 20 06:05:20 CST 2026
+1) source file in the app workspace (written by dsh, inside filesDir):
+DSH_SAF_SAVE_OK 2026-10-20 from dsh
+2) saf command (Node) -> filesystem request -> MainActivity picker:
+saf: save requested (seq=1792447275222)
+saf: save done: published 36 bytes to content://com.android.providers.downloads.documents/document/341
+content://com.android.providers.downloads.documents/document/341
+3) SafBridge log (CREATE_DOCUMENT target + publish):
+06:02:12.664 [DshSaf] launched CREATE_DOCUMENT title=dsh-save-test.txt
+06:04:27.328 [DshSaf] save target uri=content://com.android.providers.downloads.documents/document/341 src=/data/user/0/com.dsh.android/files/dsh/dsh-save-test.txt
+06:04:28.846 [DshSaf] safPublish /data/user/0/com.dsh.android/files/dsh/dsh-save-test.txt -> content://com.android.providers.downloads.documents/document/341 (36 bytes)
+06:04:28.847 [DshSaf] publish result ok=true uri=content://com.android.providers.downloads.documents/document/341
+4) persisted target URI:
+content://com.android.providers.downloads.documents/document/341
+5) the file the picker produced, read with adb shell cat:
+DSH_SAF_SAVE_OK 2026-10-20 from dsh
+6) adb shell ls -la:
+-rw-rw---- 1 u0_a0 media_rw 36 2026-10-20 06:04 /sdcard/Download/dsh-save-test.txt

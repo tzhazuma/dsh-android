@@ -1056,3 +1056,23 @@ Full log: `evidence/logs/dsh-saf-open-device.txt`.
    tracks `resumed` (set from MainActivity.onResume/onPause) and the watcher waits for it
    (up to 150 s) instead of firing into the void. When testing on this shared device,
    check `topResumedActivity` immediately before every tap.
+
+## 11.6 SAF save round-trip verified (same session)
+
+    saf: save requested (seq=1792447275222)
+    06:02:12 [DshSaf] launched CREATE_DOCUMENT title=dsh-save-test.txt
+    06:04:27 [DshSaf] save target uri=content://com.android.providers.downloads.documents/document/341
+    06:04:28 [DshSaf] safPublish .../files/dsh/dsh-save-test.txt -> .../document/341 (36 bytes)
+    06:04:28 [DshSaf] publish result ok=true uri=.../document/341
+    saf: save done: published 36 bytes to content://.../document/341
+
+    $ adb shell cat /sdcard/Download/dsh-save-test.txt
+    DSH_SAF_SAVE_OK 2026-10-20 from dsh
+    $ adb shell ls -la /sdcard/Download/dsh-save-test.txt
+    -rw-rw---- 1 u0_a0 media_rw 36 2026-10-20 06:04 /sdcard/Download/dsh-save-test.txt
+
+Note: CREATE_DOCUMENT on this ROM is served by `com.android.documentsui/.picker.PickActivity`
+(not the vivo filemanager), while ACTION_OPEN_DOCUMENT goes to
+`com.android.filemanager/.selector.view.SelectorHomeActivity` — both are reachable through
+the same contract. Evidence: `evidence/logs/dsh-saf-save-device.txt`,
+`evidence/logs/dsh-saf-open-device.txt`.
