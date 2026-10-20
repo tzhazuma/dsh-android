@@ -1076,3 +1076,47 @@ Note: CREATE_DOCUMENT on this ROM is served by `com.android.documentsui/.picker.
 `com.android.filemanager/.selector.view.SelectorHomeActivity` — both are reachable through
 the same contract. Evidence: `evidence/logs/dsh-saf-save-device.txt`,
 `evidence/logs/dsh-saf-open-device.txt`.
+
+## 12. "没有 bash" 的根因与修复
+
+用户报告：安卓端 dsh 不能写入/edit、也没有 bash。
+
+排查结论：
+
+1. **工作区不是权限问题。** `files/.dsh/storages/workspace.json` 里工作区是
+   `/data/data/com.dsh.android/files/dsh`，属于应用私有目录，本 uid 可写 —— 存储权限不是原因。
+2. **设备上根本没有 bash。** `/system/bin/sh` 是唯一的 shell（toybox），
+   `/system/bin/bash`、`ash`、`mksh` 都不存在。
+3. **dsh 的 PATH 里也没有任何 bash。** `DshRuntime.applyEnv()` 只设了
+   `PATH=/system/bin:/system/xbin:<files>/bin`，而且没有设 `SHELL`。
+   agent 写的命令基本都以 `bash` 开头，于是每一步 shell 都失败，
+   表现成「这个设备没有 shell」，随后它就放弃 edit/运行。
+4. Termux 确实装了（`com.termux`），`allow-external-apps = true` 已开，
+   `com.termux.permission.RUN_COMMAND` 也已授予（granted=true）。
+   但 Termux 的 bash 在它自己的私有目录里，**只有 Termux 自己的 uid 能执行**，
+   dsh 无法直接调用 —— 所以 `TermuxDispatch` 走 RUN_COMMAND 转发是必要的补充，
+   不该作为唯一路径。
+
+修复（`DshRuntime.java`）：在 `files/bin/`（本来就在 PATH 上）里放两个一行的 exec shim，
+并把 `SHELL` 指过去：
+
+```sh
+#!/system/bin/sh
+exec /system/bin/sh "$@"
+```
+
+```java
+env.put("SHELL", ensureShim(ctx, "bash", "/system/bin/sh", "$@").getAbsolutePath());
+ensureShim(ctx, "sh", "/system/bin/sh", "$@");
+```
+
+这样任何 `bash -c ...` 都能落到 toybox sh 上（不依赖 Termux、不涉及跨 uid），
+Termux 可用时仍可走原有 dispatch 拿到完整 bash。
+
+顺带修了构建：`AndroidManifest.xml` 里硬编码的 `android:debuggable="true"` 会让
+release 构建直接报错（`HardcodedDebugMode`），已移除（模型配置早就灌好了，
+需要 run-as 时用 debug 构建类型）。另外本机 Gradle 9.3.1 低于项目要求的 9.4.1，
+`~/.gradle/wrapper/dists/gradle-9.4.1-bin/.../bin/gradle` 可用。
+
+APK 已构建并签名：`android-app/app/build/outputs/apk/release/app-release-signed.apk`（136 MB，
+含 libnode.so 49.7 MB + dsh-bundle 66.5 MB）。

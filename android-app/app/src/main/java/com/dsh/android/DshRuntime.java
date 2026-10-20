@@ -105,10 +105,45 @@ public final class DshRuntime {
         // dsh's shell) -- putting it on PATH is what makes `saf open` work from
         // any command dsh runs.
         env.put("PATH", "/system/bin:/system/xbin:" + new File(files, "bin").getAbsolutePath());
+        // Android ships /system/bin/sh (toybox) and no bash at all. dsh's tools and the commands
+        // an agent writes assume `bash` exists, so without this every shell step fails with
+        // "bash: not found" -- which reads to the agent as "this device has no shell" and makes it
+        // give up on editing/running anything. Point SHELL and a `bash` shim at something real.
+        env.put("SHELL", ensureShim(ctx, "bash", "/system/bin/sh", "$@").getAbsolutePath());
+        // Same for the other names a script may hard-code.
+        ensureShim(ctx, "sh", "/system/bin/sh", "$@");
         // The SAF CLI needs to find filesDir without guessing: HOME is filesDir,
         // but make it explicit.
         env.put("DSH_SAF_DIR", files.getAbsolutePath());
         env.put("OPENSSL_CONF", ensureOpensslConf(ctx).getAbsolutePath());
+    }
+
+    /**
+     * Install (once) a tiny shell shim in filesDir/bin under `name`, pointing at `target`.
+     *
+     * Android has no bash — only toybox at /system/bin/sh — but dsh's tool descriptions and most
+     * of the commands an agent writes start with `bash`. A missing bash makes every shell step
+     * fail, which the agent reports as "this device has no shell", and then it refuses to edit or
+     * run anything. filesDir/bin is already on PATH, so a one-line exec shim is enough: the
+     * script is a real file the app owns, and `/system/bin/sh` is always executable.
+     */
+    public static File ensureShim(Context ctx, String name, String target, String args) {
+        File dir = new File(ctx.getFilesDir(), "bin");
+        dir.mkdirs();
+        File shim = new File(dir, name);
+        String body = "#!/system/bin/sh\nexec " + target + " " + args + "\n";
+        try {
+            if (!shim.isFile() || shim.length() != body.length()) {
+                try (Writer w = new OutputStreamWriter(new FileOutputStream(shim), "UTF-8")) {
+                    w.write(body);
+                }
+            }
+            // setExecutable is what actually makes it runnable; the mode does not survive a copy.
+            shim.setExecutable(true, false);
+        } catch (Exception e) {
+            LogFile.log(TAG, "could not create " + name + " shim: " + e);
+        }
+        return shim;
     }
 
     /** Create (once) an empty-but-valid OpenSSL config inside our own data dir. */

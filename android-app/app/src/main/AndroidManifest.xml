@@ -14,12 +14,14 @@
         <package android:name="com.termux" />
     </queries>
 
+    <!-- Not debuggable: a release build rejects a hardcoded debuggable flag, and the config
+         it was needed for (the model credentials in files/.dsh) is already in place.
+         Use the debug build type when run-as access is required. -->
     <application
         android:label="dsh"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:allowBackup="false"
-        android:debuggable="true"
         android:extractNativeLibs="true"
         android:usesCleartextTraffic="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
