@@ -114,6 +114,11 @@ public final class DshRuntime {
         ensureShim(ctx, "sh", "/system/bin/sh", "$@");
         // The SAF CLI needs to find filesDir without guessing: HOME is filesDir,
         // but make it explicit.
+        // Termux is installed on many of these devices and is the only place a real bash lives.
+        // Its own uid is the only one allowed to execute files there, so these are *pointers* for
+        // tooling and for the RUN_COMMAND bridge -- not something this process can exec directly.
+        env.put("TERMUX_PREFIX", "/data/data/com.termux/files/usr");
+        env.put("TERMUX_BASH", "/data/data/com.termux/files/usr/bin/bash");
         env.put("DSH_SAF_DIR", files.getAbsolutePath());
         env.put("OPENSSL_CONF", ensureOpensslConf(ctx).getAbsolutePath());
     }

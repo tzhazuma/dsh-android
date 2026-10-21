@@ -1120,3 +1120,37 @@ release 构建直接报错（`HardcodedDebugMode`），已移除（模型配置�
 
 APK 已构建并签名：`android-app/app/build/outputs/apk/release/app-release-signed.apk`（136 MB，
 含 libnode.so 49.7 MB + dsh-bundle 66.5 MB）。
+
+## 14. 只有 toybox 的 sh 够不够？以及怎么调 Termux
+
+**toybox 并不像听起来那么弱。** `/system/bin` 里有 sed / grep / awk / find / xargs / tar /
+gzip / sort / cut / tr / printf / timeout / nc 等，日常脚本的绝大多数能跑。
+真正缺的是：bash 专属语法（数组、`[[ ]]`、进程替换）、以及 python / git / curl 这类**额外包**。
+
+所以策略是两层：
+
+1. **`files/bin/bash` 与 `files/bin/sh`** → 一行的 exec shim，落到 `/system/bin/sh`。
+   这一层永远可用、零依赖，保证任何以 `bash` 开头的命令至少不会「找不到命令」。
+2. **Termux 通道** → 通过 `com.termux.RUN_COMMAND` 使用真正的 bash 与它装好的包。
+
+第 2 层为什么不是一个 shell 脚本就能搞定：
+
+- Termux 的 bash 在 `/data/data/com.termux/files/usr/bin/`，**只有 Termux 自己的 uid 能执行**；
+  SELinux 也不允许跨 uid 读它的私有目录。所以必须走服务转发（`TermuxDispatch.dispatch()`，
+  当前状态 `DISPATCH_OK`、权限 `granted=true`）。
+- RUN_COMMAND 是**单向**的：Termux 执行完不会把 stdout 送回调用者。要拿回输出，脚本必须把结果
+  写到一个**双方都能读**的位置，而 dsh 的应用私有目录 Termux 写不进去。
+  可行落点只有共享存储（`/sdcard/...`），这要求应用具备存储访问权限
+  （FreeCAD 就是为此申请了 `MANAGE_EXTERNAL_STORAGE`）。
+- 于是完整实现需要：请求/响应文件对（放在共享目录）、一个 Java 侧轮询线程、
+  超时与清理。约 80 行 Java，不是一条命令能替代的。
+
+已先行落地的部分：给 Node 进程导出
+
+```
+TERMUX_PREFIX=/data/data/com.termux/files/usr
+TERMUX_BASH=/data/data/com.termux/files/usr/bin/bash
+```
+
+这样工具和 agent 能知道 Termux 在哪、并且在需要时通过 dispatch 转发。
+完整的 `termux` 命令行（带回显输出）留作下一步。
