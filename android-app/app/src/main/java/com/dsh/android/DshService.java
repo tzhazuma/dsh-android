@@ -25,6 +25,12 @@ import java.io.File;
  * bundle extraction.
  */
 public class DshService extends Service {
+
+    private java.io.File VscodeBootFiles ()
+    {
+        return new java.io.File (getFilesDir (), "bin");
+    }
+
     public static final String TAG = "DshService";
     private static final String CHANNEL = "dsh-host";
     private static final int NOTIFICATION_ID = 1;
@@ -134,6 +140,21 @@ public class DshService extends Service {
 
             // ---- 3b. executables must live in nativeLibraryDir, not here ----
             DshRuntime.linkExecutables(this, nld);
+
+            // Prove the shell shim is executable. A script at files/bin/bash cannot work --
+            // Android 10+ refuses execve on app_data_file, so the shim is libbashsh.so in
+            // nativeLibraryDir linked into PATH. If this line reports EACCES again, that
+            // assumption has broken.
+            try {
+                String sh = new File(VscodeBootFiles(), "bash").getAbsolutePath();
+                Exec.Result r = Exec.run(
+                        java.util.Arrays.asList(sh, "-c", "echo BASHSELFTEST_OK; uname -m"),
+                        getFilesDir(), env -> DshRuntime.applyEnv(env, this), 15000);
+                BootLog.say("bash selftest rc=" + r.rc + " out="
+                        + r.out.trim().replace('\n', '|') + " err=" + r.err.trim());
+            } catch (Throwable t) {
+                BootLog.say("bash selftest failed: " + t);
+            }
 
             // ---- 3c. the SAF command-line front door used by dsh ----
             SafBridge.installCli(this);
