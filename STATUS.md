@@ -1154,3 +1154,68 @@ TERMUX_BASH=/data/data/com.termux/files/usr/bin/bash
 
 这样工具和 agent 能知道 Termux 在哪、并且在需要时通过 dispatch 转发。
 完整的 `termux` 命令行（带回显输出）留作下一步。
+
+## 2026-10-22：opencode-go-2 已配进安卓 dsh；Shizuku 其实一直都在
+
+### 1. opencode-go-2
+
+安卓 dsh 的凭据里**本来就有** `OPENCODE_GO_API_KEY` 和 `OPENCODE_GO_2_API_KEY`
+（早前同步 `.credentials.yaml` 时一起带过去了），缺的只是 **provider 定义**和默认模型指向。
+
+做法：把 Mac 上 `~/.dsh/profiles/desktop/cordis.patch.yml` 里整整 236 行的
+`opencode-go-2` 块搬到设备的 `files/.dsh/profiles/web/cordis.patch.yml`，
+并把 `agent-default-model` 改成：
+
+```yaml
+- id: agent-default-model
+  config:
+    provider: opencode-go-2
+    model: deepseek-v4.1-flash
+```
+
+`opencode-go-2` 的要点：
+- `apiKeyEnv: OPENCODE_GO_2_API_KEY`
+- `baseURL: https://opencode.ai/zen/go/v1`
+- `api: openai-completions`
+- 自定义头 `x-opencode-session: kimi-code-azuma-mac-2`
+  （和第一个 opencode-go 的 `...-mac` 区分开）
+
+设备上需要 debuggable 包才能写 `files/.dsh/`（release 包 run-as 会被拒），
+所以临时装了 `assembleDebug` 版本 —— 与 release 同用 debug 签名，可直接覆盖安装。
+
+验证：dsh 重启后进程存活、web 服务在 8900–8903 正常监听，说明配置被接受。
+模型真正可用要等下一次对话请求。
+
+### 2. Shizuku 一直都在，之前的检测是错的
+
+子智能体报告「Shizuku 根本没装」，实测：
+
+```
+$ pm list packages | grep -c moe.shizuku
+1
+$ ps -A | grep shizuku
+u0_a321  10931 ... moe.shizuku.privileged.api
+shell    11400 ... shizuku_server          ← 服务在跑，shell uid
+$ ls /data/local/tmp | grep shizuku
+drwx---rwx shizuku
+-rwx------ shizuku_starter
+```
+
+所以 **Shizuku 已安装、已启用、服务正在运行**。之前那次「没装」的结论是
+agent 在它自己的沙箱里跑 `pm list packages` 得到空结果导致的误判 —— 这类包管理查询
+在受限环境下并不可靠。
+
+真正卡住的是**接入方式**，不是安装与否：
+
+- Shizuku 的能力通过 **Binder** 暴露，dsh 是 Node 进程，没有 SDK 就无法直接拿 binder；
+- 通用后备 `rish` 需要 `app_process`，而应用 uid 起 `app_process` 会因为
+  dalvik-cache 归属问题直接 abort（`Error changing dalvik-cache ownership`）。
+
+**可行路线**（按代价排序）：
+1. **Termux 通道**（最实际）：dsh 已有 `TermuxDispatch` 且
+   `com.termux.permission.RUN_COMMAND` 已授予；RUN_COMMAND 是单向的，
+   要拿回输出需要一个「共享目录请求/响应文件对 + Java 轮询线程」的桥，约 80 行 Java。
+2. **Shizuku SDK 集成**：在 dsh 的 Java 侧引入 Shizuku API，暴露一个
+   「以 shell uid 执行命令」的方法给 Node —— 工作量大，但这是唯一能真正用上
+   shell 权限的方式。
+3. `nc -l -p 9999 -e sh`（在 Termux 里手动跑）作为不需要任何权限的临时通道。
