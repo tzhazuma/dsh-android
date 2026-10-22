@@ -150,7 +150,18 @@ public class DshService extends Service {
                 Exec.Result r = Exec.run(
                         java.util.Arrays.asList(sh, "-c", "echo BASHSELFTEST_OK; uname -m"),
                         getFilesDir(), env -> DshRuntime.applyEnv(env, this), 15000);
-                BootLog.say("bash selftest rc=" + r.rc + " out="
+                // Round-trip a command through Termux. RUN_COMMAND alone is one-way, so this
+            // exercises the file handshake that actually returns stdout.
+            try {
+                TermuxBridge.Result tr = TermuxBridge.run(this,
+                        "echo BRIDGE_OK; uname -m; echo $TERMUX_VERSION", 20000);
+                BootLog.say("termux bridge ok=" + tr.ok + " rc=" + tr.rc
+                        + " out=" + tr.out.trim().replace('\n', '|')
+                        + (tr.error != null ? " err=" + tr.error : ""));
+            } catch (Throwable t) {
+                BootLog.say("termux bridge threw " + t);
+            }
+            BootLog.say("bash selftest rc=" + r.rc + " out="
                         + r.out.trim().replace('\n', '|') + " err=" + r.err.trim());
             } catch (Throwable t) {
                 BootLog.say("bash selftest failed: " + t);

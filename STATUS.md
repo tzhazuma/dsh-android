@@ -1219,3 +1219,26 @@ agent 在它自己的沙箱里跑 `pm list packages` 得到空结果导致的误
    「以 shell uid 执行命令」的方法给 Node —— 工作量大，但这是唯一能真正用上
    shell 权限的方式。
 3. `nc -l -p 9999 -e sh`（在 Termux 里手动跑）作为不需要任何权限的临时通道。
+
+## 2026-10-22：dsh → Termux 的请求/响应桥
+
+`TermuxDispatch` 只能单向下发（RUN_COMMAND 没有回传），所以 dsh 能"让 Termux 做事"
+但永远看不到结果。新增 `TermuxBridge` 用共享目录做握手：
+
+```
+dsh    写    /sdcard/dsh-bridge/cmd-<id>.sh
+dsh    发    RUN_COMMAND bash .../runner.sh <id>
+Termux 跑    cmd-<id>.sh，把 stdout/stderr 写进 out-<id>.txt，退出码写 rc-<id>.txt
+dsh    轮询  看到 rc-<id>.txt 就读取并清理
+```
+
+前提：`com.termux.permission.RUN_COMMAND` 已授权（已有），并且 Termux 有共享存储
+读权限 —— 否则 runner 根本看不到请求文件。
+
+启动时会跑一次自检并写进 `files/dsh.log`：
+
+```
+termux bridge ok=true rc=0 out=BRIDGE_OK|aarch64|...
+```
+
+（本轮最后一次安装后应用未再启动，这条日志还没产生，下轮验证。）
