@@ -109,9 +109,9 @@ public final class DshRuntime {
         // an agent writes assume `bash` exists, so without this every shell step fails with
         // "bash: not found" -- which reads to the agent as "this device has no shell" and makes it
         // give up on editing/running anything. Point SHELL and a `bash` shim at something real.
-        env.put("SHELL", ensureShim(ctx, "bash", "/system/bin/sh", "$@").getAbsolutePath());
+        env.put("SHELL", ensureShim(ctx, "bash").getAbsolutePath());
         // Same for the other names a script may hard-code.
-        ensureShim(ctx, "sh", "/system/bin/sh", "$@");
+        ensureShim(ctx, "sh");
         // The SAF CLI needs to find filesDir without guessing: HOME is filesDir,
         // but make it explicit.
         // Termux is installed on many of these devices and is the only place a real bash lives.
@@ -132,23 +132,19 @@ public final class DshRuntime {
      * run anything. filesDir/bin is already on PATH, so a one-line exec shim is enough: the
      * script is a real file the app owns, and `/system/bin/sh` is always executable.
      */
-    public static File ensureShim(Context ctx, String name, String target, String args) {
+    public static File ensureShim (Context ctx, String name)
+    {
         File dir = new File(ctx.getFilesDir(), "bin");
         dir.mkdirs();
-        File shim = new File(dir, name);
-        String body = "#!/system/bin/sh\nexec " + target + " " + args + "\n";
+        File link = new File(dir, name);
+        File real = new File(ctx.getApplicationInfo().nativeLibraryDir, "libbashsh.so");
         try {
-            if (!shim.isFile() || shim.length() != body.length()) {
-                try (Writer w = new OutputStreamWriter(new FileOutputStream(shim), "UTF-8")) {
-                    w.write(body);
-                }
-            }
-            // setExecutable is what actually makes it runnable; the mode does not survive a copy.
-            shim.setExecutable(true, false);
-        } catch (Exception e) {
-            LogFile.log(TAG, "could not create " + name + " shim: " + e);
+            java.nio.file.Files.deleteIfExists(link.toPath());
+            android.system.Os.symlink(real.getAbsolutePath(), link.getAbsolutePath());
+        } catch (Throwable t) {
+            LogFile.log(TAG, "could not link " + name + " -> " + real + ": " + t);
         }
-        return shim;
+        return link;
     }
 
     /** Create (once) an empty-but-valid OpenSSL config inside our own data dir. */
