@@ -153,6 +153,7 @@ public class DshService extends Service {
                 // Round-trip a command through Termux. RUN_COMMAND alone is one-way, so this
             // exercises the file handshake that actually returns stdout.
             try {
+            TermuxTool.ensureReceiver(this);
                 TermuxBridge.Result tr = TermuxBridge.run(this,
                         "echo BRIDGE_OK; uname -m; echo $TERMUX_VERSION", 20000);
                 BootLog.say("termux bridge ok=" + tr.ok + " rc=" + tr.rc

@@ -1318,3 +1318,22 @@ termux bridge   ok=true rc=0 out=BRIDGE_OK|aarch64|0.119.0-beta.3
 
 - bash 自检证明**安卓上真的能执行 bash**（`files/bin/bash` 是 nativeLibraryDir 里的 ELF）
 - 桥的返回值里 `0.119.0-beta.3` 是 Termux 自己的 `$TERMUX_VERSION`，证明命令跑在独立 Termux 里
+
+## 2026-10-23：让模型能调用 Termux —— 广播进、文件出
+
+dsh 自己的 shell 是 Android 的 toybox，没有 python、没有 clang、没有 apt。Termux 里全都有，
+但它在另一个 uid 下，唯一的通路是 `TermuxBridge` 已经实现的 RUN_COMMAND。
+
+桥是 Java 侧的，而 dsh 的 Tool 跑在同一个应用的 Node 半边，两者需要一个不依赖对方运行时的通道。
+做法是**广播进、文件出**：
+
+```
+am broadcast -a com.dsh.android.TERMUX_RUN --es cmd 'uname -m; echo TOOL_OK'
+→ files/termux-result
+{"ok":true,"rc":0,"out":"aarch64\nTOOL_OK"}
+```
+
+任何能执行 `am broadcast` 的东西都能发命令，回复落在 `files/termux-result`，
+Node 半边直接读 —— 两边共享同一个应用 uid，不需要任何权限。
+
+真机验证（上面那行就是实际输出）。
