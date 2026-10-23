@@ -68,6 +68,14 @@ public final class TermuxBridge {
     public static Result run(Context ctx, String command, long timeoutMs) {
         Result r = new Result();
         File d = dir(ctx);
+        // The handshake needs shared storage in both directions: dsh writes the request there,
+        // and Termux can only answer there. Failing here with the reason beats a bare timeout.
+        if (!Environment.getExternalStorageState().equals(Environment.MEDIA_MOUNTED)
+                || !d.canWrite()) {
+            r.error = "shared storage is not writable (" + Environment.getExternalStorageState()
+                    + "); the bridge needs " + d + " on both sides";
+            return r;
+        }
         installRunner(ctx);
         String id = Long.toString(System.currentTimeMillis());
         File cmd = new File(d, "cmd-" + id + ".sh");
@@ -111,7 +119,9 @@ public final class TermuxBridge {
                 break;
             }
         }
-        r.error = "timed out after " + timeoutMs + " ms (is Termux running, with storage access?)";
+        r.error = "timed out after " + timeoutMs + " ms. Termux must be able to read " + d
+                + " -- run \"termux-setup-storage\" in Termux and grant the prompt -- and the"
+                + " Termux app must not be disabled";
         return r;
     }
 

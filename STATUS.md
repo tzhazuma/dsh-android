@@ -1242,3 +1242,18 @@ termux bridge ok=true rc=0 out=BRIDGE_OK|aarch64|...
 ```
 
 （本轮最后一次安装后应用未再启动，这条日志还没产生，下轮验证。）
+
+## 2026-10-23：Termux 桥加了两条明确的失败诊断
+
+原来的超时消息只写「timed out after N ms」，看不出是没装 Termux、Termux 被冻结、
+还是**没有共享存储权限**。后者是最可能的：握手要靠 `/sdcard/dsh-bridge` 双向读写，
+而 Termux 的存储权限不是默认给的，要用户自己跑 `termux-setup-storage` 并授权。
+
+现在：
+
+- 写请求之前先检查 `Environment.getExternalStorageState()` 和目录是否可写，
+  不可写直接返回原因，不浪费 20 秒；
+- 超时消息直接点名最可能的原因和修复动作。
+
+注意：run 命令本身是通过 RUN_COMMAND 传过去的，所以**即使没有存储权限，
+命令其实能执行** —— 拿不回输出而已。这也是为什么这个桥必须依赖 /sdcard。
