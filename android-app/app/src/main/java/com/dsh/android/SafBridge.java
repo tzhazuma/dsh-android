@@ -254,6 +254,14 @@ public final class SafBridge {
                     long seq = Long.parseLong(parts[0].trim());
                     final String op = parts[1].trim();
                     final String arg = parts.length > 2 ? parts[2] : "";
+                    // A request left behind by a previous session looks brand new to a fresh
+                    // watcher (seen starts at -1), so every start would pop a document picker
+                    // that then sits on top of the UI. Anything older than this is stale.
+                    if (System.currentTimeMillis() - rf.lastModified() > 8000) {
+                        //noinspection ResultOfMethodCallIgnored
+                        rf.delete();
+                        continue;
+                    }
                     if (seq == seen) continue;
                     seen = seq;
                     currentSeq = seq;

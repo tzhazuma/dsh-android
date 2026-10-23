@@ -1296,3 +1296,25 @@ termux bridge ok=true rc=0 out=BRIDGE_OK|aarch64|0.119.0-beta.3
 ```
 
 `0.119.0-beta.3` 是 **Termux 自己的 `$TERMUX_VERSION`**，证明命令确实在独立 Termux 里执行。
+
+## 2026-10-23：dsh 的 SAF 遗留请求也会卡住界面
+
+和 VS Code 完全相同的 bug：`SafBridge` 的监视器在进程启动时 `seen = -1`，
+把**上次会话留下的 `files/saf/req`** 当成新请求，于是每次启动都拉起系统文件选择器，
+它会一直盖在最上层，应用根本没机会显示。
+
+修法同样：读请求前检查文件年龄，超过 8 秒视为残留并删除。
+
+排查时还踩了一个坑：一直以为卡住的是 `com.android.filemanager`（vivo 文件管理器），
+实际是 **`com.android.documentsui`**（AOSP 文档选择器）。停错包的时候它纹丝不动，
+停对之后立刻恢复。
+
+### 真机验证（13:06，全新一次启动）
+
+```
+bash selftest   rc=0 out=BASHSELFTEST_OK|aarch64
+termux bridge   ok=true rc=0 out=BRIDGE_OK|aarch64|0.119.0-beta.3
+```
+
+- bash 自检证明**安卓上真的能执行 bash**（`files/bin/bash` 是 nativeLibraryDir 里的 ELF）
+- 桥的返回值里 `0.119.0-beta.3` 是 Termux 自己的 `$TERMUX_VERSION`，证明命令跑在独立 Termux 里
