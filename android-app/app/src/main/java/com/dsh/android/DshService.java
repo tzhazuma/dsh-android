@@ -138,6 +138,17 @@ public class DshService extends Service {
                 BootLog.say("dsh bundle already extracted");
             }
 
+            // The Termux userland needs no external app: the prefix, proot and an Ubuntu rootfs
+            // ship in this APK, the same way they do in the VS Code port. Without it every shell
+            // step is Android's toybox -- no python, no clang, no apt -- and reaching the real
+            // Termux app over the RUN_COMMAND bridge is a fallback, not the foundation.
+            // Packages first: tar comes from packages-aarch64.zip and ensure() needs it to unpack
+            // the rootfs. Getting this order wrong shows up as "Cannot run program tar:
+            // Permission denied", which reads like a permissions problem rather than a missing
+            // step.
+            TermuxBootstrap.ensurePackages(this);
+            TermuxBootstrap.ensure(this);
+
             // ---- 3b. executables must live in nativeLibraryDir, not here ----
             DshRuntime.linkExecutables(this, nld);
 

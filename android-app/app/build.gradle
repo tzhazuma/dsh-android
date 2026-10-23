@@ -7,7 +7,11 @@ android {
     defaultConfig {
         applicationId 'com.dsh.android'
         minSdk 24
-        targetSdk 35
+        // targetSdk 28 is deliberate: Android 10+ refuses execve() on files the app owns inside
+        // its own data dir, which would make the bundled Termux prefix (bash, python, clang, tar,
+        // proot) unusable -- the same constraint the VS Code port documents. It is the only way an
+        // app may run binaries from its own directory.
+        targetSdk 28
         versionCode 3
         versionName '0.3.0'
         ndk { abiFilters 'arm64-v8a' }

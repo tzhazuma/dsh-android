@@ -105,13 +105,27 @@ public final class DshRuntime {
         // dsh's shell) -- putting it on PATH is what makes `saf open` work from
         // any command dsh runs.
         env.put("PATH", "/system/bin:/system/xbin:" + new File(files, "bin").getAbsolutePath());
-        // Android ships /system/bin/sh (toybox) and no bash at all. dsh's tools and the commands
-        // an agent writes assume `bash` exists, so without this every shell step fails with
-        // "bash: not found" -- which reads to the agent as "this device has no shell" and makes it
-        // give up on editing/running anything. Point SHELL and a `bash` shim at something real.
-        env.put("SHELL", ensureShim(ctx, "bash").getAbsolutePath());
-        // Same for the other names a script may hard-code.
-        ensureShim(ctx, "sh");
+        // Prefer the prefix this APK ships: real bash, python, clang, apt. The toybox shim below
+        // stays as the fallback for the very first moments before the unpack finishes.
+        File bundledBash = new File(files, "usr/bin/bash");
+        File bundledPrefix = new File(files, "usr");
+        if (bundledBash.isFile()) {
+            env.put("PREFIX", bundledPrefix.getAbsolutePath());
+            env.put("SHELL", bundledBash.getAbsolutePath());
+            env.put("TERM", "xterm-256color");
+            env.put("PATH", bundledPrefix.getAbsolutePath() + "/bin:"
+                    + bundledPrefix.getAbsolutePath() + "/bin/applets:/system/bin");
+            env.put("LD_LIBRARY_PATH", bundledPrefix.getAbsolutePath() + "/lib");
+            env.put("TMPDIR", new File(files, "tmp").getAbsolutePath());
+            // apt has /data/data/com.termux/files/usr/etc/apt compiled in and ignores PREFIX, so
+            // without APT_CONFIG every apt call answers "Unable to determine a suitable packaging
+            // system type" -- which reads like a broken install rather than a missing variable.
+            env.put("APT_CONFIG", new File(bundledPrefix, "etc/apt/apt.conf").getAbsolutePath());
+            env.put("HOME", files.getAbsolutePath());
+        } else {
+            env.put("SHELL", ensureShim(ctx, "bash").getAbsolutePath());
+            ensureShim(ctx, "sh");
+        }
         // The SAF CLI needs to find filesDir without guessing: HOME is filesDir,
         // but make it explicit.
         // Termux is installed on many of these devices and is the only place a real bash lives.
