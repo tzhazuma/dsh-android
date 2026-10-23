@@ -8,6 +8,12 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- The Termux round-trip needs a directory both apps can reach: dsh writes the request to
+         /sdcard/dsh-bridge and Termux writes the reply there. Without this dsh itself cannot
+         write, and the bridge reports "shared storage is not writable". -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
 
     <!-- Android 11+ package visibility: without this we cannot even resolve com.termux -->
     <queries>

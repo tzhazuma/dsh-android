@@ -1257,3 +1257,42 @@ termux bridge ok=true rc=0 out=BRIDGE_OK|aarch64|...
 
 注意：run 命令本身是通过 RUN_COMMAND 传过去的，所以**即使没有存储权限，
 命令其实能执行** —— 拿不回输出而已。这也是为什么这个桥必须依赖 /sdcard。
+
+## 2026-10-23：dsh → Termux 桥打通（改用广播回传，绕开存储权限）
+
+### 文件方案为什么走不通
+
+原本设计是 `/sdcard/dsh-bridge` 双向读写。真机上加了两条诊断后立刻暴露问题：
+
+```
+termux bridge ok=false rc=-1
+  err=shared storage is not writable (mounted);
+      the bridge needs /storage/emulated/0/dsh-bridge on both sides
+```
+
+- dsh 的 `targetSdk` 是 **35**，所以 `WRITE_EXTERNAL_STORAGE` 在 scoped storage 下无效；
+- 需要 `MANAGE_EXTERNAL_STORAGE`，但这个 ROM **拒绝通过 appops 授予**
+  （`appops set --uid ... allow` 之后状态仍是 `default`），只能用户手动在设置里开。
+
+### 广播方案
+
+RUN_COMMAND 本来就能把脚本内联传过去（`bash -c <script>`），所以**根本不需要共享文件**：
+
+1. dsh 把命令 base64 编码，拼进要执行的脚本；
+2. Termux 解码、执行、把输出 base64 编码；
+3. Termux 用 `am broadcast` 把结果发回 dsh 的 action；
+4. dsh 用动态注册的 `BroadcastReceiver` 收到，完成等待。
+
+Termux 发广播不需要权限，dsh 收自己 action 的广播也不需要权限。
+
+两个细节：
+- 输出上限 60 KB（广播 extras 走 binder transaction，有大小限制）；
+- 每次调用带随机 token，别的应用即使发同名广播也无法完成它没应答的调用。
+
+### 真机验证
+
+```
+termux bridge ok=true rc=0 out=BRIDGE_OK|aarch64|0.119.0-beta.3
+```
+
+`0.119.0-beta.3` 是 **Termux 自己的 `$TERMUX_VERSION`**，证明命令确实在独立 Termux 里执行。

@@ -1,33 +1,49 @@
 package com.dsh.android;
 
+import android.content.BroadcastReceiver;
 import android.content.Context;
-import android.os.Environment;
+import android.content.Intent;
+import android.content.IntentFilter;
+import android.os.Build;
+import android.util.Base64;
 
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Runs a command in Termux and gets its output back.
  *
- * <p>Termux's RUN_COMMAND intent is fire-and-forget: it starts a command but never returns its
- * stdout, which is why dsh could hand work to Termux and learn nothing about the result. The two
- * apps share no private storage, so the handshake goes through a directory on shared storage:
+ * <p>RUN_COMMAND is fire-and-forget: the intent starts a command and never returns its stdout.
+ * The obvious fix -- rendezvous through a file under /sdcard -- does not work here, because this
+ * app targets API 35 and the ROM refuses MANAGE_EXTERNAL_STORAGE through appops, so dsh cannot
+ * write there at all:
  *
  * <pre>
- *   dsh     writes  cmd-&lt;id&gt;.sh
- *   dsh     sends   RUN_COMMAND bash .../runner.sh &lt;id&gt;
- *   Termux  runs    cmd-&lt;id&gt;.sh, writes out-&lt;id&gt;.txt and rc-&lt;id&gt;.txt
- *   dsh     polls for out-&lt;id&gt;.txt
+ *   shared storage is not writable (mounted); the bridge needs /storage/emulated/0/dsh-bridge
  * </pre>
  *
- * <p>Requires com.termux.permission.RUN_COMMAND (already granted) and, on Termux's side, read
- * access to shared storage -- without it the runner cannot see the request at all.
+ * <p>So the reply comes back as a broadcast instead. Termux needs no permission to send one, and
+ * dsh needs no permission to receive its own action. The command and the output both travel
+ * base64-encoded, which keeps quotes, newlines and binary bytes out of the shell and out of the
+ * intent extras.
+ *
+ * <p>A random token per call is echoed back, so another app broadcasting the same action cannot
+ * complete a call it did not answer.
  */
 public final class TermuxBridge {
 
-    private static final String DIR_NAME = "dsh-bridge";
+    private static final String ACTION = "com.dsh.android.TERMUX_RESULT";
+    private static final String EXTRA_TOKEN = "token";
+    private static final String EXTRA_RC = "rc";
+    private static final String EXTRA_OUT = "out";
+    /** Broadcast extras ride a binder transaction; keep well under its limit. */
+    private static final int MAX_OUTPUT = 60 * 1024;
+
+    private static final Map<String, Pending> PENDING = new ConcurrentHashMap<>();
+    private static boolean registered;
 
     private TermuxBridge() { }
 
@@ -38,99 +54,82 @@ public final class TermuxBridge {
         public String error = null;
     }
 
-    public static File dir(Context ctx) {
-        File base = Environment.getExternalStorageDirectory();
-        File d = new File(base, DIR_NAME);
-        //noinspection ResultOfMethodCallIgnored
-        d.mkdirs();
-        return d;
+    private static final class Pending {
+        final CountDownLatch latch = new CountDownLatch(1);
+        volatile int rc = -1;
+        volatile String out = "";
     }
 
-    /** Write the runner Termux executes; idempotent, called before every request. */
-    public static void installRunner(Context ctx) {
-        File runner = new File(dir(ctx), "runner.sh");
-        String sh = ""
-                + "#!/data/data/com.termux/files/usr/bin/bash\n"
-                + "# Reads cmd-<id>.sh, runs it, writes out-<id>.txt and rc-<id>.txt.\n"
-                + "id=\"$1\"\n"
-                + "d=/sdcard/" + DIR_NAME + "\n"
-                + "[ -f \"$d/cmd-$id.sh\" ] || exit 3\n"
-                + "bash \"$d/cmd-$id.sh\" > \"$d/out-$id.txt\" 2>&1\n"
-                + "echo $? > \"$d/rc-$id.txt\"\n";
-        try (FileOutputStream w = new FileOutputStream(runner)) {
-            w.write(sh.getBytes(StandardCharsets.UTF_8));
-        } catch (Exception e) {
-            BootLog.say("termux bridge: could not write runner: " + e);
+    /** Register once; safe to call repeatedly. */
+    public static synchronized void ensureReceiver(Context ctx) {
+        if (registered) return;
+        BroadcastReceiver r = new BroadcastReceiver() {
+            @Override public void onReceive(Context context, Intent intent) {
+                String token = intent.getStringExtra(EXTRA_TOKEN);
+                if (token == null) return;
+                Pending p = PENDING.remove(token);
+                if (p == null) return;
+                p.rc = intent.getIntExtra(EXTRA_RC, -1);
+                p.out = decode(intent.getStringExtra(EXTRA_OUT));
+                p.latch.countDown();
+            }
+        };
+        IntentFilter filter = new IntentFilter(ACTION);
+        if (Build.VERSION.SDK_INT >= 33) {
+            ctx.registerReceiver(r, filter, Context.RECEIVER_EXPORTED);
+        } else {
+            ctx.registerReceiver(r, filter);
         }
+        registered = true;
     }
 
-    /** Run {@code command} in Termux, waiting up to {@code timeoutMs} for its output. */
+    /** Run {@code command} inside Termux, waiting up to {@code timeoutMs} for its output. */
     public static Result run(Context ctx, String command, long timeoutMs) {
         Result r = new Result();
-        File d = dir(ctx);
-        // The handshake needs shared storage in both directions: dsh writes the request there,
-        // and Termux can only answer there. Failing here with the reason beats a bare timeout.
-        if (!Environment.getExternalStorageState().equals(Environment.MEDIA_MOUNTED)
-                || !d.canWrite()) {
-            r.error = "shared storage is not writable (" + Environment.getExternalStorageState()
-                    + "); the bridge needs " + d + " on both sides";
+        ensureReceiver(ctx);
+        String token = Long.toHexString(System.nanoTime()) + Integer.toHexString(
+                (int) (Math.random() * 0x7fffffff));
+        String b64 = Base64.encodeToString(command.getBytes(StandardCharsets.UTF_8), Base64.NO_WRAP);
+        // Termux's bash runs this: decode the command, run it, decode nothing on the way back
+        // except base64-encoding the output so quotes and newlines survive the broadcast.
+        String script = ""
+                + "cmd=$(echo " + b64 + " | base64 -d)\n"
+                + "out=$(bash -c \"$cmd\" 2>&1); rc=$?\n"
+                + "enc=$(printf %s \"$out\" | base64 -w0 2>/dev/null || printf %s \"$out\" | base64 | tr -d '\\n')\n"
+                + "am broadcast -a " + ACTION
+                + " --es " + EXTRA_TOKEN + " " + token
+                + " --ei " + EXTRA_RC + " $rc"
+                + " --es " + EXTRA_OUT + " \"$enc\" >/dev/null 2>&1\n";
+        Pending p = new Pending();
+        PENDING.put(token, p);
+        String err = TermuxDispatch.dispatch(ctx, script, "dsh-bridge");
+        if (err != null && err.contains("DISPATCH_FAILED")) {
+            PENDING.remove(token);
+            r.error = err.trim();
             return r;
         }
-        installRunner(ctx);
-        String id = Long.toString(System.currentTimeMillis());
-        File cmd = new File(d, "cmd-" + id + ".sh");
-        File out = new File(d, "out-" + id + ".txt");
-        File rc = new File(d, "rc-" + id + ".txt");
-        try (FileOutputStream w = new FileOutputStream(cmd)) {
-            w.write(command.getBytes(StandardCharsets.UTF_8));
-        } catch (Exception e) {
-            r.error = "could not write the command: " + e;
-            return r;
-        }
-        String dispatched = TermuxDispatch.dispatch(ctx,
-                "bash " + d.getAbsolutePath() + "/runner.sh " + id, "dsh-bridge");
-        if (dispatched != null) {
-            r.error = dispatched;
-            return r;
-        }
-        long deadline = System.currentTimeMillis() + timeoutMs;
-        while (System.currentTimeMillis() < deadline) {
-            if (rc.isFile()) {
-                try {
-                    r.rc = Integer.parseInt(read(rc).trim());
-                } catch (Exception ignored) {
-                    r.rc = -1;
-                }
-                r.out = read(out);
-                r.ok = true;
-                // Clean up so the shared directory does not grow without bound.
-                //noinspection ResultOfMethodCallIgnored
-                cmd.delete();
-                //noinspection ResultOfMethodCallIgnored
-                out.delete();
-                //noinspection ResultOfMethodCallIgnored
-                rc.delete();
+        try {
+            if (!p.latch.await(timeoutMs, TimeUnit.MILLISECONDS)) {
+                PENDING.remove(token);
+                r.error = "timed out after " + timeoutMs + " ms; is Termux installed and enabled?";
                 return r;
             }
-            try {
-                Thread.sleep(60);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                break;
-            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            r.error = "interrupted";
+            return r;
         }
-        r.error = "timed out after " + timeoutMs + " ms. Termux must be able to read " + d
-                + " -- run \"termux-setup-storage\" in Termux and grant the prompt -- and the"
-                + " Termux app must not be disabled";
+        r.ok = true;
+        r.rc = p.rc;
+        r.out = p.out.length() > MAX_OUTPUT ? p.out.substring(0, MAX_OUTPUT) : p.out;
         return r;
     }
 
-    private static String read(File f) {
-        try (FileInputStream in = new FileInputStream(f)) {
-            byte[] b = new byte[(int) Math.min(f.length(), 1 << 20)];
-            int n = in.read(b);
-            return n > 0 ? new String(b, 0, n, StandardCharsets.UTF_8) : "";
-        } catch (Exception e) {
+    private static String decode(String b64) {
+        if (b64 == null) return "";
+        try {
+            return new String(Base64.decode(b64, Base64.DEFAULT), StandardCharsets.UTF_8);
+        } catch (Throwable t) {
             return "";
         }
     }
