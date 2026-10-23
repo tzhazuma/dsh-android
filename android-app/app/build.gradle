@@ -13,7 +13,13 @@ android {
         ndk { abiFilters 'arm64-v8a' }
     }
     buildTypes {
-        release { minifyEnabled false }
+        release {
+            minifyEnabled false
+            // Debuggable on purpose, like the VS Code port: run-as is how files/ gets inspected,
+            // and without it every verification has to go through screenshots over adb taps, which
+            // this ROM answers unreliably.
+            debuggable true
+        }
     }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
