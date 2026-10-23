@@ -123,6 +123,7 @@ public final class DshRuntime {
         // this app otherwise has no way to know that `am broadcast -a com.dsh.android.TERMUX_RUN`
         // exists, and the reply file is JSON that has to be unwrapped by hand.
         ensureTermuxCommand(ctx);
+        ensureTermuxTool(ctx);
         env.put("DSH_SAF_DIR", files.getAbsolutePath());
         env.put("OPENSSL_CONF", ensureOpensslConf(ctx).getAbsolutePath());
     }
@@ -136,6 +137,82 @@ public final class DshRuntime {
      * run anything. filesDir/bin is already on PATH, so a one-line exec shim is enough: the
      * script is a real file the app owns, and `/system/bin/sh` is always executable.
      */
+
+    /**
+     * Install (once) the model-facing termux_run tool and register it in the profile composition.
+     *
+     * <p>The `termux` shell command is enough for a human, but a model cannot discover it and has no
+     * schema to fill in. dsh's tools are Cordis plugin rows: the package has to sit where its own
+     * `@deepseek-ai/dsh-tools` import resolves (the bundle's node_modules), and the profile's
+     * cordis.patch.yml has to insert a row for it. Both are done here so a fresh install has the
+     * tool without anyone editing YAML over adb.
+     *
+     * <p>Two details cost real debugging time and are encoded below: the row must be an
+     * `- insert:` patch (a bare top-level row is treated as an override and skipped with only a
+     * warning), and the `name` must be an absolute path to the plugin's entry file, because a
+     * package specifier is resolved from the profile directory, where the bundle's node_modules is
+     * not on the path.
+     */
+    private static void ensureTermuxTool (Context ctx)
+    {
+        File files = ctx.getFilesDir ();
+        File dir = new File (files, "dsh/node_modules/@deepseek-ai/dsh-tool-termux");
+        File entry = new File (dir, "lib/index.js");
+        if (!entry.isFile ())
+          {
+            if (!dir.isDirectory () && !dir.mkdirs ()) return;
+            try (java.util.zip.ZipInputStream in = new java.util.zip.ZipInputStream (
+                     ctx.getAssets ().open ("dsh-tool-termux.tar")))
+              {
+                java.util.zip.ZipEntry e;
+                byte[] buf = new byte[1 << 15];
+                while ((e = in.getNextEntry ()) != null)
+                  {
+                    String rel = e.getName ().replaceFirst ("^ttermux/", "");
+                    if (rel.isEmpty () || e.isDirectory ()) continue;
+                    File out = new File (dir, rel);
+                    File parent = out.getParentFile ();
+                    if (parent != null && !parent.isDirectory () && !parent.mkdirs ()) continue;
+                    try (java.io.FileOutputStream w = new java.io.FileOutputStream (out))
+                      {
+                        int n;
+                        while ((n = in.read (buf)) > 0) w.write (buf, 0, n);
+                      }
+                  }
+              }
+            catch (java.io.IOException ex)
+              {
+                LogFile.log (TAG, "could not unpack the termux tool: " + ex);
+                return;
+              }
+          }
+
+        File patch = new File (files, ".dsh/profiles/web/cordis.patch.yml");
+        if (!patch.isFile ()) return;
+        try
+          {
+            String text = new String (java.nio.file.Files.readAllBytes (patch.toPath ()),
+                                      java.nio.charset.StandardCharsets.UTF_8);
+            if (text.contains ("tool-termux")) return;
+            String row = ""
+                    + "- insert:\n"
+                    + "    - id: tool-termux\n"
+                    + "      name: \"" + entry.getAbsolutePath () + "\"\n"
+                    + "      config:\n"
+                    + "        filesDir: " + files.getAbsolutePath () + "\n"
+                    + "        timeoutMs: 120000\n";
+            try (java.io.FileOutputStream w = new java.io.FileOutputStream (patch, true))
+              {
+                w.write (row.getBytes (java.nio.charset.StandardCharsets.UTF_8));
+              }
+            LogFile.log (TAG, "registered the termux_run tool in the web profile");
+          }
+        catch (java.io.IOException ex)
+          {
+            LogFile.log (TAG, "could not register the termux tool: " + ex);
+          }
+    }
+
     /**
      * Install (once) a `termux` command: run a command in Termux and print its output.
      *
