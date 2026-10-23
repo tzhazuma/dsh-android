@@ -119,6 +119,10 @@ public final class DshRuntime {
         // tooling and for the RUN_COMMAND bridge -- not something this process can exec directly.
         env.put("TERMUX_PREFIX", "/data/data/com.termux/files/usr");
         env.put("TERMUX_BASH", "/data/data/com.termux/files/usr/bin/bash");
+        // Make the Termux bridge one command instead of a broadcast incantation. An agent inside
+        // this app otherwise has no way to know that `am broadcast -a com.dsh.android.TERMUX_RUN`
+        // exists, and the reply file is JSON that has to be unwrapped by hand.
+        ensureTermuxCommand(ctx);
         env.put("DSH_SAF_DIR", files.getAbsolutePath());
         env.put("OPENSSL_CONF", ensureOpensslConf(ctx).getAbsolutePath());
     }
@@ -132,6 +136,51 @@ public final class DshRuntime {
      * run anything. filesDir/bin is already on PATH, so a one-line exec shim is enough: the
      * script is a real file the app owns, and `/system/bin/sh` is always executable.
      */
+    /**
+     * Install (once) a `termux` command: run a command in Termux and print its output.
+     *
+     * <p>dsh's own shell is toybox -- no python, no clang, no apt. Termux has them but runs under
+     * another uid, so the only route is the RUN_COMMAND bridge this app already implements, which
+     * is a broadcast in and a JSON file out. That is fine for the code and useless for a model that
+     * just wants to run a command, so this wraps it:
+     *
+     * <pre>
+     *   termux 'python3 -c "print(6*7)"'   # -> 42
+     * </pre>
+     *
+     * <p>The reply is read back from files/termux-result, which both halves of this app share.
+     */
+    private static void ensureTermuxCommand (Context ctx)
+    {
+        File script = new File(new File(ctx.getFilesDir(), "bin"), "termux");
+        if (script.isFile ()) return;
+        File parent = script.getParentFile ();
+        if (parent != null && !parent.isDirectory () && !parent.mkdirs ()) return;
+        String body = ""
+                + "#!/system/bin/sh\n"
+                + "# Run a command inside Termux and print what it produced.\n"
+                + "# Usage: termux '<shell command>'\n"
+                + "F=" + ctx.getFilesDir ().getAbsolutePath () + "\n"
+                + "RES=\"$F/termux-result\"\n"
+                + "rm -f \"$RES\"\n"
+                + "am broadcast -a com.dsh.android.TERMUX_RUN --es cmd \"$1\" >/dev/null 2>&1\n"
+                + "i=0\n"
+                + "while [ ! -f \"$RES\" ] && [ $i -lt 60 ]; do sleep 0.2; i=$((i+1)); done\n"
+                + "if [ ! -f \"$RES\" ]; then echo \"termux: no reply (is the dsh service running?)\" >&2; exit 1; fi\n"
+                + "# {\"ok\":true,\"rc\":0,\"out\":\"...\"} -- print out and exit with rc.\n"
+                + "O=$(sed -n 's/.*\"out\":\"\\(.*\\)\",\"rc\".*/\\1/p' \"$RES\")\n"
+                + "R=$(sed -n 's/.*\"rc\":\\([0-9-]*\\)\\.*/\\1/p' \"$RES\")\n"
+                + "printf '%b\\n' \"$O\"\n"
+                + "exit ${R:-0}\n";
+        try (java.io.FileOutputStream w = new java.io.FileOutputStream (script)) {
+            w.write (body.getBytes (java.nio.charset.StandardCharsets.UTF_8));
+        } catch (java.io.IOException e) {
+            LogFile.log (TAG, "could not write termux command: " + e);
+        }
+        //noinspection ResultOfMethodCallIgnored
+        script.setExecutable (true, false);
+    }
+
     public static File ensureShim (Context ctx, String name)
     {
         File dir = new File(ctx.getFilesDir(), "bin");
