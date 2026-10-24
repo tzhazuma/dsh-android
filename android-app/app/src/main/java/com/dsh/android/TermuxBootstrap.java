@@ -245,7 +245,7 @@ public final class TermuxBootstrap {
                 + "Acquire::AllowInsecureRepositories \"true\";\n";
         installDpkgShim(ctx);
         fixPkgCachePath(ctx);
-        pinMirror(ctx);
+        chooseMirrorGroup(ctx);
         int repaired = repairKeyringLinks(prefix(ctx));
         if (repaired > 0) {
             LogFile.log(TAG, "termux: repaired " + repaired + " keyring links");
@@ -829,8 +829,6 @@ public final class TermuxBootstrap {
                 + "exit $rc\n";
     }
 
-    /** The mirror pkg should use; the automatic choice was a Swedish host that times out here. */
-    private static final String PKG_MIRROR = "https://mirrors.cernet.edu.cn/termux/apt/termux-main";
 
     /**
      * Make Termux's pkg stat this prefix's apt cache, and keep it off the mirror lottery.
@@ -870,55 +868,36 @@ public final class TermuxBootstrap {
     }
 
     /**
-     * Pin pkg and apt to one mirror.
+     * Point pkg at a mirror <em>group</em>, so it measures and picks the fastest one.
      *
-     * <p>Even with the cache path fixed, a cache older than six hours sends pkg through the
-     * weighted random pick again, and on this network that selected a host that times out. Two
-     * files make the choice deterministic: chosen_mirrors, which pkg's select_mirror() reads
-     * before scanning the mirror tree (a symlink to the cernet definition, the shape
-     * termux-change-repo writes), and sources.list, which apt itself reads.
+     * <p>Three earlier states were all wrong in different ways. The stock bootstrap left pkg
+     * scanning every mirror on earth, which measured 71 URLs for minutes and then picked a random
+     * European host. A previous build of this app pinned one host, which made the choice
+     * deterministic but also made the sweep dead: a host that dies takes the app with it. Removing
+     * the pin restores the sweep, but the sweep then picked mirror.leitecastro.com at 4.6 kB/s.
+     *
+     * <p>{@code chosen_mirrors} may name a <em>directory</em>, which {@code termux-change-repo}
+     * writes when you pick a region. That is the correct lever: pkg then tests only the regional
+     * candidates and picks the fastest by measurement -- 432 kB/s here against the 4.6 kB/s of the
+     * worldwide sweep, and still a real test rather than a hardcoded host.
      */
-    private static void pinMirror(Context ctx) {
+    private static void chooseMirrorGroup(Context ctx) {
         File prefix = prefix(ctx);
-        File mirror = new File(prefix, "etc/termux/mirrors/chinese_mainland/mirrors.cernet.edu.cn");
+        File group = new File(prefix, "etc/termux/mirrors/chinese_mainland");
         File chosen = new File(prefix, "etc/termux/chosen_mirrors");
+        if (!group.isDirectory()) return;
         try {
-            if (!mirror.isFile()) return;
-            boolean pinned = java.nio.file.Files.isSymbolicLink(chosen.toPath())
-                    && java.nio.file.Files.readSymbolicLink(chosen.toPath()).toString()
-                            .equals(mirror.getAbsolutePath());
-            if (!pinned) {
-                // A symlink left by an earlier run (or a hand edit) points somewhere else; drop
-                // it so the link can be replaced. Directories are a user's mirror group and are
-                // left alone.
-                if (java.nio.file.Files.isSymbolicLink(chosen.toPath()) || chosen.isFile()) {
-                    java.nio.file.Files.deleteIfExists(chosen.toPath());
-                }
-                if (!chosen.exists()) {
-                    android.system.Os.symlink(mirror.getAbsolutePath(), chosen.getAbsolutePath());
-                    LogFile.log(TAG, "pkg: pinned the mirror to " + PKG_MIRROR);
-                }
+            if (java.nio.file.Files.isSymbolicLink(chosen.toPath())) {
+                java.nio.file.Path target = java.nio.file.Files.readSymbolicLink(chosen.toPath());
+                if (target.toString().equals(group.getAbsolutePath())) return;   // already right
+                java.nio.file.Files.deleteIfExists(chosen.toPath());
+            } else if (chosen.exists()) {
+                return;   // a directory or file the user chose themselves
             }
+            android.system.Os.symlink(group.getAbsolutePath(), chosen.getAbsolutePath());
+            BootLog.say("pkg: mirror group set to chinese_mainland");
         } catch (Throwable e) {
-            LogFile.log(TAG, "pkg: could not pin chosen_mirrors: " + e);
-        }
-        File sources = new File(prefix, "etc/apt/sources.list");
-        String want = "# The main termux repository\n"
-                + "deb " + PKG_MIRROR + " stable main\n";
-        try {
-            String have = sources.isFile()
-                    ? new String(java.nio.file.Files.readAllBytes(sources.toPath()),
-                            java.nio.charset.StandardCharsets.UTF_8) : "";
-            // Only when it is not already ours: rewriting always would bump the mtime that
-            // pkg's update_apt_cache() compares against pkgcache.bin.
-            if (!have.contains(PKG_MIRROR)) {
-                try (java.io.FileOutputStream w = new java.io.FileOutputStream(sources)) {
-                    w.write(want.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-                }
-                LogFile.log(TAG, "apt: sources.list pinned to " + PKG_MIRROR);
-            }
-        } catch (IOException e) {
-            LogFile.log(TAG, "apt: could not pin sources.list: " + e);
+            BootLog.say("pkg: could not set the mirror group: " + e);
         }
     }
 
