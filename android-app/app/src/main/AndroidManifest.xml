@@ -24,6 +24,7 @@
          it was needed for (the model credentials in files/.dsh) is already in place.
          Use the debug build type when run-as access is required. -->
     <application
+        android:requestLegacyExternalStorage="true"
         android:label="dsh"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"

@@ -115,7 +115,12 @@ public final class DshRuntime {
             env.put("TERM", "xterm-256color");
             env.put("PATH", bundledPrefix.getAbsolutePath() + "/bin:"
                     + bundledPrefix.getAbsolutePath() + "/bin/applets:/system/bin");
-            env.put("LD_LIBRARY_PATH", bundledPrefix.getAbsolutePath() + "/lib");
+            // Both, runtime first: the prefix's own libs are needed by bash/python/clang, and the
+            // rt directory holds libnode's dependencies (libcares, libcrypto, libicu...). Setting
+            // this to the prefix alone made libnode fail to link -- "library libcares.so not
+            // found" -- so the server never started and the UI sat on a blank page.
+            env.put("LD_LIBRARY_PATH", rtDir(ctx).getAbsolutePath()
+                    + ":" + bundledPrefix.getAbsolutePath() + "/lib");
             env.put("TMPDIR", new File(files, "tmp").getAbsolutePath());
             // apt has /data/data/com.termux/files/usr/etc/apt compiled in and ignores PREFIX, so
             // without APT_CONFIG every apt call answers "Unable to determine a suitable packaging

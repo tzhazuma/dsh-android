@@ -304,13 +304,25 @@ public final class TermuxBootstrap {
                 + "set -e\n"
                 + "PREFIX=\"" + p + "\"\n"
                 + "export PREFIX\n"
-                + "for pkg in python clang make git; do\n"
+                + "for pkg in python clang make git golang rust openjdk-17 openssh android-tools; do\n"
                 + "  echo \"== $pkg ==\"\n"
                 + "  \"$PREFIX/bin/pkg-install\" \"$pkg\" || echo \"  $pkg failed, continuing\"\n"
                 + "done\n"
                 + "echo\n"
                 + "echo \"python: $(\"$PREFIX/bin/python3\" --version 2>&1)\"\n"
                 + "echo \"clang:  $(\"$PREFIX/bin/clang\" --version 2>&1 | head -1)\"\n"
+                + "echo \"go:     $(\"$PREFIX/bin/go\" version 2>&1)\"\n"
+                + "echo \"rust:   $(\"$PREFIX/bin/rustc\" --version 2>&1)\"\n"
+                // openjdk unpacks under lib/jvm and relies on a post-install script this
+                // installer does not run, so java is missing from bin/ until these links exist.
+                + "for b in java javac jar; do\n"
+                + "  [ -f \"$PREFIX/lib/jvm/java-17-openjdk/bin/$b\" ] && ln -sf \"$PREFIX/lib/jvm/java-17-openjdk/bin/$b\" \"$PREFIX/bin/$b\"\n"
+                + "done\n"
+                + "echo \"java:   $(\"$PREFIX/bin/java\" -version 2>&1 | head -1)\"\n"
+                // sshd needs host keys before it will start
+                + "[ -f \"$PREFIX/etc/ssh/ssh_host_ed25519_key\" ] || \"$PREFIX/bin/ssh-keygen\" -A 2>/dev/null\n"
+                + "echo \"ssh:    $(\"$PREFIX/bin/ssh\" -V 2>&1 | head -1)\"\n"
+                + "echo \"adb:    $(\"$PREFIX/bin/adb\" version 2>&1 | head -1)\"\n"
                 + "echo \"make:   $(\"$PREFIX/bin/make\" --version 2>&1 | head -1)\"\n";
         try (java.io.FileOutputStream w = new java.io.FileOutputStream(devEnv)) {
             w.write(devScript.getBytes(java.nio.charset.StandardCharsets.UTF_8));
