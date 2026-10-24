@@ -139,8 +139,11 @@ public final class TermuxBootstrap {
             LogFile.log(TAG, "termux bootstrap: " + n + " files, " + links + " symlinks, "
                     + exec + " executable, " + fixed + " shebangs, "
                     + (System.currentTimeMillis() - t0) + " ms");
-            // First boot as well, not just the fast path above.
+            // First boot as well, not just the fast path above: the shim, the pkg cache path and
+            // the mirror pin live in the files this re-sync owns, and a fresh install should not
+            // have to be started twice before its first "pkg install" works.
             ensureRootfs(ctx);
+            writeAptConfig(ctx);
         } catch (Throwable t) {
             LogFile.log(TAG, "termux bootstrap failed: " + t);
         }
@@ -204,7 +207,8 @@ public final class TermuxBootstrap {
         String p = prefix(ctx).getAbsolutePath();
         // A shell inside the *standalone* Termux app, over ssh to its sshd on 127.0.0.1.
         String conf = ""
-                + "// Written by com.vscode.android: make Termux's apt use this app's prefix.\n"
+                + "// Written by " + ctx.getPackageName()
+                + ": make Termux's apt use this app's prefix.\n"
                 + "Dir \"" + p + "/\";\n"
                 + "Dir::Etc \"" + p + "/etc/apt/\";\n"
                 + "Dir::Etc::parts \"" + p + "/etc/apt/apt.conf.d\";\n"
@@ -240,6 +244,8 @@ public final class TermuxBootstrap {
                 // suits a sideloaded dev environment but should be replaced by importing the key.
                 + "Acquire::AllowInsecureRepositories \"true\";\n";
         installDpkgShim(ctx);
+        fixPkgCachePath(ctx);
+        pinMirror(ctx);
         int repaired = repairKeyringLinks(prefix(ctx));
         if (repaired > 0) {
             LogFile.log(TAG, "termux: repaired " + repaired + " keyring links");
@@ -367,8 +373,12 @@ public final class TermuxBootstrap {
         } catch (java.io.IOException e) {
             LogFile.log(TAG, "could not write apt.conf: " + e);
         }
-        // apt refuses to run without these directories existing.
-        for (String d : new String[]{"var/lib/apt/lists", "var/lib/apt/lists/partial",
+        // apt refuses to run without these directories existing. The etc/apt ones are not
+        // cosmetic: without apt.conf.d and preferences.d every apt command prints
+        // "W: Unable to read .../etc/apt/apt.conf.d/ - DirectoryExists (2: No such file or
+        // directory)", which reads like a broken prefix.
+        for (String d : new String[]{"etc/apt/apt.conf.d", "etc/apt/preferences.d",
+                "etc/apt/sources.list.d", "var/lib/apt/lists", "var/lib/apt/lists/partial",
                 "var/cache/apt/archives/partial", "var/lib/dpkg", "var/log/apt"}) {
             //noinspection ResultOfMethodCallIgnored
             new File(prefix(ctx), d).mkdirs();
@@ -461,7 +471,7 @@ public final class TermuxBootstrap {
                 //noinspection ResultOfMethodCallIgnored
                 real.setExecutable(true, false);
             }
-            String script = "" + SCRIPT;
+            String script = shimScript(ctx);
             byte[] want = script.getBytes(java.nio.charset.StandardCharsets.UTF_8);
             byte[] have = shim.isFile()
                     ? java.nio.file.Files.readAllBytes(shim.toPath()) : null;
@@ -482,19 +492,33 @@ public final class TermuxBootstrap {
         }
     }
 
-    private static final String SCRIPT = ""
-                + "#!/data/user/0/com.vscode.android/files/usr/bin/bash\n"
+    /**
+     * The dpkg shim, with this app's own absolute paths substituted.
+     *
+     * <p>It started life as a constant in the VS Code app and was copied here verbatim, so the
+     * interpreter on the first line and PREFIX both still named
+     * /data/user/0/com.vscode.android/files/usr. That directory belongs to the other app and this
+     * uid cannot execute anything inside it, so every dpkg invocation -- apt's own included --
+     * died with "Permission denied" and apt reported "Could not exec dpkg!". Deriving both from
+     * ctx keeps the shim correct for whichever package it is installed into, and lets the
+     * per-start re-sync replace an already broken copy on the device.
+     */
+    private static String shimScript(Context ctx) {
+        String p = prefix(ctx).getAbsolutePath();
+        String files = ctx.getFilesDir().getAbsolutePath();
+        return ""
+                + "#!" + p + "/bin/bash\n"
                 + "# dpkg shim: Termux's real dpkg has /data/data/com.termux/files/usr/etc/dpkg/dpkg.cfg.d\n"
                 + "# compiled in and aborts before it parses a single argument, so apt-get install could fetch\n"
                 + "# packages but never unpack them. This stands in for it: it unpacks with dpkg-deb (which works)\n"
                 + "# and replays enough of the --status-fd protocol for apt to believe the operation succeeded.\n"
                 + "set -u\n"
-                + "PREFIX=/data/user/0/com.vscode.android/files/usr\n"
+                + "PREFIX=" + p + "\n"
                 + "# apt invokes dpkg with a minimal environment and no PATH, so every helper this script needs\n"
                 + "# (mkdir, mktemp, cp, grep) has to be reachable on its own.\n"
                 + "export PATH=$PREFIX/bin:/system/bin:/system/xbin\n"
                 + "export LD_LIBRARY_PATH=$PREFIX/lib\n"
-                + "export TMPDIR=/data/user/0/com.vscode.android/files/tmp\n"
+                + "export TMPDIR=" + files + "/tmp\n"
                 + "REAL=$PREFIX/bin/dpkg.real\n"
                 + "STATUS_FD=\"\"\n"
                 + "DB=$PREFIX/var/lib/dpkg/status\n"
@@ -508,9 +532,16 @@ public final class TermuxBootstrap {
                 + "  esac\n"
                 + "done\n"
                 + "\n"
-                + "emit() {  # emit <status-word> <pkg> [version]\n"
+                + "emit() {  # emit <dpkg-state> <pkg:arch>\n"
+                + "  # apt's status-fd parser splits on \": \" and compares the third field with a\n"
+                + "  # bare state word: \"status: jq:aarch64: unpacked\". It counts a package as\n"
+                + "  # progressed only when the state is the next one it expected, so the shim has to\n"
+                + "  # send half-installed/unpacked for unpack and half-configured/installed for\n"
+                + "  # configure. The earlier \"status: unpack jq\" lines parsed as a package named\n"
+                + "  # \"unpack jq\" and were ignored, which is why apt warned\n"
+                + "  # \"APT had planned for dpkg to do more than it reported back (0 vs 5)\".\n"
                 + "  [ -z \"$STATUS_FD\" ] && return 0\n"
-                + "  { echo \"status: $1 $2 ${3:-}\"; } >&\"$STATUS_FD\" 2>/dev/null || true\n"
+                + "  { echo \"status: $2: $1\"; } >&\"$STATUS_FD\" 2>/dev/null || true\n"
                 + "}\n"
                 + "\n"
                 + "unpack_one() {\n"
@@ -519,9 +550,9 @@ public final class TermuxBootstrap {
                 + "  ver=$(dpkg-deb -f \"$deb\" Version 2>/dev/null)\n"
                 + "  arch=$(dpkg-deb -f \"$deb\" Architecture 2>/dev/null)\n"
                 + "  [ -z \"$name\" ] && return 1\n"
-                + "  emit \"unpack\" \"$name\" \"$ver\"\n"
+                + "  emit \"half-installed\" \"$name:$arch\"\n"
                 + "  local tmp; tmp=$(mktemp -d) || return 1\n"
-                + "  dpkg-deb -x \"$deb\" \"$tmp\" || { rm -rf \"$tmp\"; emit \"unpack\" \"$name\" \"\"; return 1; }\n"
+                + "  dpkg-deb -x \"$deb\" \"$tmp\" || { rm -rf \"$tmp\"; return 1; }\n"
                 + "  # Keep the maintainer scripts: dpkg normally stores them in var/lib/dpkg/info and runs\n"
                 + "  # postinst on configure, and without them packages that create users, cache or certificates\n"
                 + "  # end up only half installed.\n"
@@ -541,17 +572,14 @@ public final class TermuxBootstrap {
                 + "  ( cd \"$src\" && find . -type f 2>/dev/null | sed \"s|^\\./||\" ) > \"$PREFIX/var/lib/dpkg/info/$name.list\"\n"
                 + "  cp -a \"$src/.\" \"$PREFIX/\" 2>/dev/null\n"
                 + "  rm -rf \"$tmp\"\n"
-                + "  # Record what we installed so apt's dependency resolution sees it next time.\n"
-                + "  if ! grep -q \"^Package: $name$\" \"$DB\" 2>/dev/null; then\n"
-                + "    {\n"
-                + "      echo \"Package: $name\"\n"
-                + "      echo \"Status: install ok unpacked\"\n"
-                + "      echo \"Version: $ver\"\n"
-                + "      echo \"Architecture: $arch\"\n"
-                + "      echo \"\"\n"
-                + "    } >> \"$DB\"\n"
-                + "  fi\n"
-                + "  emit \"unpack\" \"$name\" \"\"\n"
+                + "  # Record the unpack in dpkg's database. This has to update an existing stanza as\n"
+                + "  # well as create a new one: apt unpacks an upgrade, then runs\n"
+                + "  # \"dpkg --configure --pending\", which finds exactly the packages this file marks\n"
+                + "  # \"install ok unpacked\". Left at its old \"installed\" state, an upgraded package was\n"
+                + "  # never configured, apt reported \"planned for dpkg to do more than it reported back\",\n"
+                + "  # and jq stayed at the old version.\n"
+                + "  record_state \"$name\" \"install ok unpacked\" \"$ver\" \"$arch\"\n"
+                + "  emit \"unpacked\" \"$name:$arch\"\n"
                 + "}\n"
                 + "\n"
                 + "pkg_version() {\n"
@@ -560,20 +588,47 @@ public final class TermuxBootstrap {
                 + "    }' \"$DB\" 2>/dev/null\n"
                 + "}\n"
                 + "\n"
-                + "set_status() {  # set_status <pkg> <status line>\n"
-                + "  local pkg=\"$1\" want=\"$2\"\n"
-                + "  [ -f \"$DB\" ] || return 0\n"
-                + "  awk -v pkg=\"$pkg\" -v want=\"$want\" '\n"
-                + "    BEGIN { RS = \"\"; ORS = \"\\n\\n\" }\n"
+                + "pkg_arch() {\n"
+                + "  awk -v p=\"$1\" 'BEGIN{RS=\"\";FS=\"\\n\"} {\n"
+                + "      pkg=\"\"; arch=\"\"\n"
+                + "      for (i = 1; i <= NF; i++) {\n"
+                + "        if ($i ~ /^Package: /) pkg = substr($i, 10)\n"
+                + "        else if ($i ~ /^Architecture: /) arch = substr($i, 15)\n"
+                + "      }\n"
+                + "      if (pkg == p) { print arch; exit }\n"
+                + "    }' \"$DB\" 2>/dev/null\n"
+                + "}\n"
+                + "\n"
+                + "record_state() {  # record_state <pkg> <status line> <version> <arch>\n"
+                + "  local pkg=\"$1\" want=\"$2\" ver=\"$3\" arch=\"$4\"\n"
+                + "  # First install into an empty prefix: awk cannot read a missing file and the\n"
+                + "  # END stanza would never be written, so create it first.\n"
+                + "  [ -f \"$DB\" ] || : > \"$DB\"\n"
+                + "  awk -v pkg=\"$pkg\" -v want=\"$want\" -v ver=\"$ver\" -v arch=\"$arch\" '\n"
+                + "    BEGIN { RS = \"\"; ORS = \"\\n\\n\"; found = 0 }\n"
                 + "    {\n"
                 + "      # Paragraph mode puts a whole stanza in $0, so \"$\" can never match a single line;\n"
                 + "      # compare the first line instead.\n"
                 + "      split($0, L, \"\\n\")\n"
                 + "      if (L[1] == \"Package: \" pkg) {\n"
+                + "        found = 1\n"
                 + "        if ($0 ~ /Status:/) sub(/Status: [^\\n]*/, \"Status: \" want)\n"
                 + "        else $0 = $0 \"\\nStatus: \" want\n"
+                + "        if (ver != \"\") {\n"
+                + "          if ($0 ~ /Version:/) sub(/Version: [^\\n]*/, \"Version: \" ver)\n"
+                + "          else $0 = $0 \"\\nVersion: \" ver\n"
+                + "        }\n"
+                + "        if (arch != \"\") {\n"
+                + "          if ($0 ~ /Architecture:/) sub(/Architecture: [^\\n]*/, \"Architecture: \" arch)\n"
+                + "          else $0 = $0 \"\\nArchitecture: \" arch\n"
+                + "        }\n"
                 + "      }\n"
                 + "      print\n"
+                + "    }\n"
+                + "    END {\n"
+                + "      if (!found)\n"
+                + "        printf \"Package: %s\\nStatus: %s\\nVersion: %s\\nArchitecture: %s\\n\\n\",\n"
+                + "               pkg, want, ver, arch\n"
                 + "    }\n"
                 + "  ' \"$DB\" > \"$DB.tmp\" 2>/dev/null && mv \"$DB.tmp\" \"$DB\"\n"
                 + "}\n"
@@ -582,16 +637,18 @@ public final class TermuxBootstrap {
                 + "  local name=\"${1:-}\"\n"
                 + "  [ -z \"$name\" ] && return 0\n"
                 + "  name=\"${name%%:*}\"\n"
+                + "  local arch; arch=$(pkg_arch \"$name\"); [ -z \"$arch\" ] && arch=aarch64\n"
                 + "  local ver; ver=$(pkg_version \"$name\")\n"
                 + "  local post=\"$PREFIX/var/lib/dpkg/info/$name.postinst\"\n"
+                + "  emit \"half-configured\" \"$name:$arch\"\n"
                 + "  if [ -f \"$post\" ]; then\n"
                 + "    # dpkg runs these from / with the package's version as the argument.\n"
                 + "    ( cd / && PREFIX=\"$PREFIX\" PATH=\"$PREFIX/bin:/system/bin\" \\\n"
-                + "        LD_LIBRARY_PATH=\"$PREFIX/lib\" HOME=/data/user/0/com.vscode.android/files/home \\\n"
+                + "        LD_LIBRARY_PATH=\"$PREFIX/lib\" HOME=" + files + "/home \\\n"
                 + "        sh \"$post\" configure \"$ver\" ) >/dev/null 2>&1 || true\n"
                 + "  fi\n"
-                + "  set_status \"$name\" \"install ok installed\"\n"
-                + "  emit \"configure\" \"$name\" \"$ver\"\n"
+                + "  record_state \"$name\" \"install ok installed\" \"$ver\" \"$arch\"\n"
+                + "  emit \"installed\" \"$name:$arch\"\n"
                 + "}\n"
                 + "\n"
                 + "remove_one() {\n"
@@ -599,8 +656,9 @@ public final class TermuxBootstrap {
                 + "  [ -z \"$name\" ] && return 0\n"
                 + "  # apt passes \"tree:aarch64\"; dpkg's own records and the status file use the bare name.\n"
                 + "  name=\"${name%%:*}\"\n"
+                + "  local arch; arch=$(pkg_arch \"$name\"); [ -z \"$arch\" ] && arch=aarch64\n"
                 + "  local list=\"$PREFIX/var/lib/dpkg/info/$name.list\"\n"
-                + "  emit \"remove\" \"$name\" \"\"\n"
+                + "  emit \"half-configured\" \"$name:$arch\"\n"
                 + "  if [ -f \"$list\" ]; then\n"
                 + "    while IFS= read -r f; do\n"
                 + "      [ -n \"$f\" ] && rm -f \"$PREFIX/$f\" 2>/dev/null\n"
@@ -613,24 +671,87 @@ public final class TermuxBootstrap {
                 + "  fi\n"
                 + "  rm -f \"$PREFIX/var/lib/dpkg/info/$name.\"* 2>/dev/null\n"
                 + "  # Mark it removed rather than deleting the stanza, so apt sees a coherent history.\n"
-                + "  if [ -f \"$DB\" ]; then\n"
-                + "    awk -v pkg=\"$name\" '\n"
-                + "      BEGIN { RS=\"\"; ORS=\"\\n\\n\" }\n"
-                + "      $0 ~ \"^Package: \" pkg \"$\" { gsub(/Status: [^\\n]*/, \"Status: deinstall ok config-files\") }\n"
-                + "      { print }\n"
-                + "    ' \"$DB\" > \"$DB.tmp\" 2>/dev/null && mv \"$DB.tmp\" \"$DB\"\n"
-                + "  fi\n"
-                + "  emit \"remove\" \"$name\" \"\"\n"
+                + "  record_state \"$name\" \"deinstall ok config-files\" \"\" \"\"\n"
+                + "  emit \"half-installed\" \"$name:$arch\"\n"
+                + "}\n"
+                + "\n"
+                + "# Query commands. dpkg -l matters beyond convenience: the short form of\n"
+                + "# \"dpkg --list\" is how this shim is asked to prove that an install actually landed.\n"
+                + "list_packages() {\n"
+                + "  local want\n"
+                + "  [ $# -eq 0 ] && set -- '*'\n"
+                + "  echo 'Desired=Unknown/Install/Remove/Purge/Hold'\n"
+                + "  echo '| Status=Not/Inst/Conf-files/Unpacked/halF-conf/Half-inst/trig-aWait/Trig-pend'\n"
+                + "  echo '|/ Err?=(none)/Reinst-required (Status,Err: uppercase=bad)'\n"
+                + "  echo '||/ Name                     Version          Architecture'\n"
+                + "  echo '+++-========================-================-================'\n"
+                + "  for want in \"$@\"; do\n"
+                + "    awk -v want=\"$want\" '\n"
+                + "      BEGIN { RS = \"\"; FS = \"\\n\" }\n"
+                + "      {\n"
+                + "        pkg = \"\"; status = \"\"; ver = \"\"; arch = \"\"\n"
+                + "        for (i = 1; i <= NF; i++) {\n"
+                + "          if ($i ~ /^Package: /) pkg = substr($i, 10)\n"
+                + "          else if ($i ~ /^Status: /) status = substr($i, 9)\n"
+                + "          else if ($i ~ /^Version: /) ver = substr($i, 10)\n"
+                + "          else if ($i ~ /^Architecture: /) arch = substr($i, 15)\n"
+                + "        }\n"
+                + "        if (pkg == \"\") next\n"
+                + "        if (want != \"*\" && pkg != want) next\n"
+                + "        split(status, S, \" \")\n"
+                + "        desired = \"u\"; state = \"n\"\n"
+                + "        if (S[1] == \"install\") desired = \"i\"\n"
+                + "        else if (S[1] == \"hold\") desired = \"h\"\n"
+                + "        else if (S[1] == \"deinstall\") desired = \"r\"\n"
+                + "        else if (S[1] == \"purge\") desired = \"p\"\n"
+                + "        if (S[3] == \"installed\") state = \"i\"\n"
+                + "        else if (S[3] == \"unpacked\") state = \"U\"\n"
+                + "        else if (S[3] == \"half-configured\") state = \"F\"\n"
+                + "        else if (S[3] == \"half-installed\") state = \"H\"\n"
+                + "        else if (S[3] == \"config-files\") state = \"c\"\n"
+                + "        printf \"%s%s  %-24s %-16s %s\\n\", desired, state, pkg, ver, arch\n"
+                + "      }' \"$DB\" 2>/dev/null\n"
+                + "  done\n"
+                + "}\n"
+                + "\n"
+                + "show_status() {\n"
+                + "  local want\n"
+                + "  for want in \"$@\"; do\n"
+                + "    awk -v want=\"$want\" '\n"
+                + "      BEGIN { RS = \"\"; FS = \"\\n\" }\n"
+                + "      {\n"
+                + "        pkg = \"\"\n"
+                + "        for (i = 1; i <= NF; i++)\n"
+                + "          if ($i ~ /^Package: /) { pkg = substr($i, 10); break }\n"
+                + "        if (pkg == want) print $0 \"\\n\"\n"
+                + "      }' \"$DB\" 2>/dev/null\n"
+                + "  done\n"
+                + "}\n"
+                + "\n"
+                + "list_files() {\n"
+                + "  local want list f\n"
+                + "  for want in \"$@\"; do\n"
+                + "    list=\"$PREFIX/var/lib/dpkg/info/${want%%:*}.list\"\n"
+                + "    [ -f \"$list\" ] || continue\n"
+                + "    while IFS= read -r f; do\n"
+                + "      [ -n \"$f\" ] && echo \"$PREFIX/$f\"\n"
+                + "    done < \"$list\"\n"
+                + "  done\n"
                 + "}\n"
                 + "\n"
                 + "case \"${1:-}\" in\n"
-                + "  --version|-l|--list|--print-architecture|--print-foreign-architectures|--audit|--assert*)\n"
-                + "    case \"${1:-}\" in\n"
-                + "      --print-architecture) echo \"aarch64\" ;;\n"
-                + "      --audit|--assert*) : ;;\n"
-                + "      *) echo \"Debian 'dpkg' (shim over dpkg-deb) 1.22\" ;;\n"
-                + "    esac\n"
+                + "  --version)\n"
+                + "    echo \"Debian 'dpkg' (shim over dpkg-deb) 1.22\" ; exit 0 ;;\n"
+                + "  --print-architecture)\n"
+                + "    echo \"aarch64\" ; exit 0 ;;\n"
+                + "  --print-foreign-architectures|--audit|--assert*)\n"
                 + "    exit 0 ;;\n"
+                + "  -l|--list)\n"
+                + "    shift; list_packages \"$@\"; exit 0 ;;\n"
+                + "  -s|--status)\n"
+                + "    shift; show_status \"$@\"; exit 0 ;;\n"
+                + "  -L|--listfiles)\n"
+                + "    shift; list_files \"$@\"; exit 0 ;;\n"
                 + "esac\n"
                 + "\n"
                 + "rc=0\n"
@@ -706,6 +827,100 @@ public final class TermuxBootstrap {
                 + "fi\n"
                 + "\n"
                 + "exit $rc\n";
+    }
+
+    /** The mirror pkg should use; the automatic choice was a Swedish host that times out here. */
+    private static final String PKG_MIRROR = "https://mirrors.cernet.edu.cn/termux/apt/termux-main";
+
+    /**
+     * Make Termux's pkg stat this prefix's apt cache, and keep it off the mirror lottery.
+     *
+     * <p>pkg skips its full mirror sweep only when /data/data/com.termux/cache/apt/pkgcache.bin
+     * was modified in the last six hours. That path is outside $PREFIX and never exists in
+     * another app, so every "pkg install" re-tested every mirror URL in etc/termux/mirrors --
+     * 71 checks, two to four minutes, and then it overwrote sources.list with whichever mirror
+     * won the random weighted draw. The real cache is $PREFIX/var/cache/apt/pkgcache.bin, which
+     * apt does write; pointing the check at it makes the second and later runs take the cheap
+     * "is the current mirror still up" branch.
+     *
+     * <p>This runs from writeAptConfig on every start, and rewrites only when the text differs,
+     * so it also repairs a prefix that was installed from an older APK.
+     */
+    private static void fixPkgCachePath(Context ctx) {
+        File pkg = new File(prefix(ctx), "bin/pkg");
+        if (!pkg.isFile()) return;
+        String cache = new File(prefix(ctx), "var/cache/apt/pkgcache.bin").getAbsolutePath();
+        String archives = new File(prefix(ctx), "var/cache/apt/archives").getAbsolutePath();
+        try {
+            String have = new String(java.nio.file.Files.readAllBytes(pkg.toPath()),
+                    java.nio.charset.StandardCharsets.UTF_8);
+            String fixed = have
+                    .replace("/data/data/com.termux/cache/apt/pkgcache.bin", cache)
+                    .replace("/data/data/com.termux/cache/apt/archives", archives);
+            if (!fixed.equals(have)) {
+                java.nio.file.Files.write(pkg.toPath(), fixed.getBytes(
+                        java.nio.charset.StandardCharsets.UTF_8));
+                //noinspection ResultOfMethodCallIgnored
+                pkg.setExecutable(true, false);
+                LogFile.log(TAG, "pkg: cache checks repointed at " + cache);
+            }
+        } catch (IOException e) {
+            LogFile.log(TAG, "pkg: could not rewrite cache paths: " + e);
+        }
+    }
+
+    /**
+     * Pin pkg and apt to one mirror.
+     *
+     * <p>Even with the cache path fixed, a cache older than six hours sends pkg through the
+     * weighted random pick again, and on this network that selected a host that times out. Two
+     * files make the choice deterministic: chosen_mirrors, which pkg's select_mirror() reads
+     * before scanning the mirror tree (a symlink to the cernet definition, the shape
+     * termux-change-repo writes), and sources.list, which apt itself reads.
+     */
+    private static void pinMirror(Context ctx) {
+        File prefix = prefix(ctx);
+        File mirror = new File(prefix, "etc/termux/mirrors/chinese_mainland/mirrors.cernet.edu.cn");
+        File chosen = new File(prefix, "etc/termux/chosen_mirrors");
+        try {
+            if (!mirror.isFile()) return;
+            boolean pinned = java.nio.file.Files.isSymbolicLink(chosen.toPath())
+                    && java.nio.file.Files.readSymbolicLink(chosen.toPath()).toString()
+                            .equals(mirror.getAbsolutePath());
+            if (!pinned) {
+                // A symlink left by an earlier run (or a hand edit) points somewhere else; drop
+                // it so the link can be replaced. Directories are a user's mirror group and are
+                // left alone.
+                if (java.nio.file.Files.isSymbolicLink(chosen.toPath()) || chosen.isFile()) {
+                    java.nio.file.Files.deleteIfExists(chosen.toPath());
+                }
+                if (!chosen.exists()) {
+                    android.system.Os.symlink(mirror.getAbsolutePath(), chosen.getAbsolutePath());
+                    LogFile.log(TAG, "pkg: pinned the mirror to " + PKG_MIRROR);
+                }
+            }
+        } catch (Throwable e) {
+            LogFile.log(TAG, "pkg: could not pin chosen_mirrors: " + e);
+        }
+        File sources = new File(prefix, "etc/apt/sources.list");
+        String want = "# The main termux repository\n"
+                + "deb " + PKG_MIRROR + " stable main\n";
+        try {
+            String have = sources.isFile()
+                    ? new String(java.nio.file.Files.readAllBytes(sources.toPath()),
+                            java.nio.charset.StandardCharsets.UTF_8) : "";
+            // Only when it is not already ours: rewriting always would bump the mtime that
+            // pkg's update_apt_cache() compares against pkgcache.bin.
+            if (!have.contains(PKG_MIRROR)) {
+                try (java.io.FileOutputStream w = new java.io.FileOutputStream(sources)) {
+                    w.write(want.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                }
+                LogFile.log(TAG, "apt: sources.list pinned to " + PKG_MIRROR);
+            }
+        } catch (IOException e) {
+            LogFile.log(TAG, "apt: could not pin sources.list: " + e);
+        }
+    }
 
     private static final String TERMUX_PREFIX = "/data/data/com.termux/files/usr";
 
