@@ -113,6 +113,17 @@ public final class DshRuntime {
             env.put("PREFIX", bundledPrefix.getAbsolutePath());
             env.put("SHELL", bundledBash.getAbsolutePath());
             env.put("TERM", "xterm-256color");
+
+        // curl and everything built on libcurl has a CA path compiled in pointing at the Termux
+        // prefix (/data/data/com.termux/files/usr/etc/tls/cert.pem), which this uid cannot read:
+        // every TLS request then fails with "error adding trust anchors from file". The variable
+        // overrides that path, so setting it here fixes curl for the whole process tree --
+        // package managers included, which is why pkg/apt judged every mirror bad.
+        java.io.File caFile = new java.io.File(new java.io.File(files, "usr"), "etc/tls/cert.pem");
+        if (caFile.isFile()) {
+            env.put("CURL_CA_BUNDLE", caFile.getAbsolutePath());
+            env.put("SSL_CERT_FILE", caFile.getAbsolutePath());
+        }
             env.put("PATH", bundledPrefix.getAbsolutePath() + "/bin:"
                     + bundledPrefix.getAbsolutePath() + "/bin/applets:/system/bin");
             // Both, runtime first: the prefix's own libs are needed by bash/python/clang, and the
